@@ -8,25 +8,21 @@ from passlib.context import CryptContext
 
 from .config import settings
 
-# Используем bcrypt_sha256 как основной, bcrypt — для совместимости старых хэшей.
+# Современный и стабильный алгоритм, не зависит от bcrypt
 _pwd = CryptContext(
-    schemes=["bcrypt_sha256", "bcrypt"],
+    schemes=["pbkdf2_sha256"],
     deprecated="auto",
+    pbkdf2_sha256__default_rounds=310_000,  # близко к рекомендациям OWASP
 )
 
 
 def hash_password(password: str) -> str:
-    """
-    Хэш пароля с солью.
-    bcrypt_sha256 снимает ограничение 72 байта (Passlib делает предварительный SHA-256).
-    """
+    """Хэш пароля с солью (PBKDF2-SHA256)."""
     return _pwd.hash(password)
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
-    """
-    Проверка пароля. Поддерживает как bcrypt_sha256, так и legacy bcrypt.
-    """
+    """Проверка пароля."""
     try:
         return _pwd.verify(plain_password, password_hash)
     except Exception:

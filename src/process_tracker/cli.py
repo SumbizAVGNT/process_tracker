@@ -61,6 +61,11 @@ async def cmd_drop_db(_args) -> None:
 
 
 async def cmd_seed_rbac(_args) -> None:
+    # ✅ СНАЧАЛА гарантируем схему
+    from process_tracker.db import init_db
+    await init_db()
+
+    # потом сеем
     from process_tracker.db.session import AsyncSessionLocal
     from process_tracker.db.seed import seed_rbac
     setup_logging, logger = _logging()
