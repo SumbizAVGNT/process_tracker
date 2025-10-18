@@ -49,21 +49,37 @@ _ensure_icon("PENDING_ACTION", "SCHEDULE", "HOURGLASS_EMPTY", "HOURGLASS_TOP_OUT
 _ensure_icon("TASK_ALT_OUTLINED", "TASK_ALT", "CHECK_CIRCLE")
 _ensure_icon("ROCKET_LAUNCH", "ROCKET_LAUNCH_OUTLINED", "ROCKET", "PLAY_ARROW")
 
+
 def main(page: ft.Page):
     setup_logging()
 
-    # API-сервер FastAPI в фоне
-    start_api_server()  # 127.0.0.1:8787
+    # API-сервер FastAPI в фоне (без падения приложения при ошибке)
+    try:
+        start_api_server()  # 127.0.0.1:8787
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_server_start_failed", error=str(e))
 
+    # Параметры окна/приложения
     page.title = "Процесс Трекер"
     page.theme_mode = ft.ThemeMode.DARK
+    page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
+    page.vertical_alignment = ft.MainAxisAlignment.START
+    page.padding = 0
+    if hasattr(ft, "colors"):
+        page.bgcolor = getattr(ft.colors, "SURFACE", None)
+
+    # Навигация без дерганий — см. ui/router.ensure_shell()
     page.on_route_change = lambda r: handle_route_change(page)
 
     logger.info("app_started", env=settings.app_env)
+
+    # Инициализируем маршрут аккуратно
     page.go(page.route or "/")
+
 
 def run():
     ft.app(target=main, view=ft.AppView.WEB_BROWSER)
+
 
 if __name__ == "__main__":
     run()
