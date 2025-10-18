@@ -1,5 +1,3 @@
-# src/process_tracker/core/logging.py
-
 from __future__ import annotations
 
 import logging

@@ -1,4 +1,3 @@
-# src/process_tracker/core/security.py
 from __future__ import annotations
 
 from typing import Optional

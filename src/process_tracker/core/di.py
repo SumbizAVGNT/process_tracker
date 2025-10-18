@@ -1,4 +1,3 @@
-# src/process_tracker/core/di.py
 """
 Простой DI/Service Provider для асинхронных сервисов.
 — Единая точка выдачи AsyncSession

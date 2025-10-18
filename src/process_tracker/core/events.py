@@ -1,4 +1,3 @@
-# src/process_tracker/core/events.py
 from __future__ import annotations
 
 import asyncio
