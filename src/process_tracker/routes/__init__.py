@@ -7,14 +7,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
-from ...core.config import settings
+from ..core.config import settings  # FIX: два пункта вверх, не три
 
 
 def build_api() -> FastAPI:
     """
     Собирает FastAPI-приложение.
     Импорт роутеров выполнен ЛЕНИВО внутри функции, чтобы не ломать импорт пакета,
-    даже если tasks.py / ws.py ещё не созданы.
+    даже если tasks.py / ws.py / workflows.py ещё не созданы.
     """
     app = FastAPI(title="Process Tracker API", version="0.1.0")
 
@@ -39,7 +39,13 @@ def build_api() -> FastAPI:
         from .tasks import router as tasks_router  # type: ignore
         app.include_router(tasks_router, prefix="/api", tags=["tasks"])
     except Exception:
-        # Если файла пока нет — просто пропустим; приложение всё равно поднимется
+        # Если файла пока нет — пропускаем; приложение всё равно поднимется
+        pass
+
+    try:
+        from .workflows import router as workflows_router  # NEW
+        app.include_router(workflows_router, prefix="/api", tags=["workflows"])
+    except Exception:
         pass
 
     try:
