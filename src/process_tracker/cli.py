@@ -182,25 +182,39 @@ async def cmd_create_user(args) -> None:
         if user:
             if args.force_reset:
                 user.password_hash = hash_password(password)
+                await session.flush()
                 logger.info("user_password_reset", email=email)
             else:
                 logger.info("user_exists", email=email)
         else:
             user = await urepo.create(email=email, password_hash=hash_password(password))
+            await session.flush()
             logger.info("user_created", email=email, id=getattr(user, "id", None))
 
-        assigned = []
+        # ✅ ЯВНО подгружаем коллекцию ролей, чтобы не было ленивых запросов
+        try:
+            await session.refresh(user, attribute_names=["roles"])
+        except Exception:
+            # на всякий: у только что созданного пользователя коллекция должна быть пустой
+            if "roles" not in user.__dict__:
+                user.roles = []
+
+        # Локальный набор id для проверки членства без триггера IO
+        existing_ids = {getattr(r, "id", None) for r in (user.roles or [])}
+
+        assigned: list[str] = []
         for role_name in roles:
             role = await rrepo.get_by_name(role_name)
             if not role:
                 role = await rrepo.create(role_name, description=f"Auto-created role {role_name}")
-            if role not in user.roles:
+                await session.flush()
+            if getattr(role, "id", None) not in existing_ids:
                 user.roles.append(role)
+                existing_ids.add(getattr(role, "id", None))
                 assigned.append(role_name)
 
         await session.commit()
         logger.info("user_roles_updated", email=email, roles=[r.name for r in user.roles], newly_assigned=assigned)
-
 
 def cmd_run_api(args) -> None:
     import uvicorn
