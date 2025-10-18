@@ -11,26 +11,42 @@ from ..state import state
 from ..components.forms import async_button, toast
 
 
+CARD_WIDTH = 520
+FIELD_WIDTH = CARD_WIDTH - 48  # с учётом padding=24 слева/справа
+
+
 def view(page: ft.Page) -> ft.View:
     page.title = "Процесс Трекер — вход"
 
+    heading = ft.Column(
+        [
+            ft.Text("Процесс Трекер", size=28, weight="w700"),
+            ft.Text("Войдите, чтобы продолжить", size=14, color=ft.colors.ON_SURFACE_VARIANT),
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=6,
+    )
+
     email = ft.TextField(
         label="Email",
-        autofocus=True,
+        hint_text="name@company.com",
+        prefix_icon=ft.icons.EMAIL,
         keyboard_type=ft.KeyboardType.EMAIL,
-        expand=True,
+        width=FIELD_WIDTH,          # фиксируем ширину
+        dense=False,
     )
     password = ft.TextField(
         label="Пароль",
+        prefix_icon=ft.icons.LOCK_OUTLINE,
         password=True,
         can_reveal_password=True,
-        expand=True,
+        width=FIELD_WIDTH,          # фиксируем ширину
+        dense=False,
     )
 
     async def do_login():
         e = (email.value or "").strip().lower()
         p = (password.value or "").strip()
-
         if not e or not p:
             toast(page, "Заполни email и пароль", kind="warn")
             return
@@ -56,37 +72,42 @@ def view(page: ft.Page) -> ft.View:
         "Войти",
         task_factory=do_login,
         icon=ft.icons.LOGIN,
-        success_message=None,  # сообщаем сами при успехе
+        success_message=None,
         error_message="Ошибка входа",
-        width=160,
+        width=260,
     )
 
-    form = ft.Container(
+    card = ft.Container(
         content=ft.Column(
-            controls=[
-                ft.Text("Процесс Трекер", size=26, weight="bold"),
-                ft.Text("Войдите, чтобы продолжить", size=14, color=ft.colors.ON_SURFACE_VARIANT),
+            [
+                heading,
                 ft.Divider(height=8, color="transparent"),
                 email,
                 password,
-                ft.Row([login_btn], alignment=ft.MainAxisAlignment.END),
+                ft.Container(
+                    content=ft.Row([login_btn], alignment=ft.MainAxisAlignment.CENTER),
+                    padding=ft.padding.only(top=10),
+                    width=FIELD_WIDTH,
+                ),
             ],
-            spacing=12,
-            tight=True,
+            spacing=14,
+            tight=True,               # компактная колонка по контенту
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         ),
-        padding=20,
-        width=420,
-        bgcolor=ft.colors.with_opacity(0.03, ft.colors.SURFACE_VARIANT),
-        border_radius=12,
+        width=CARD_WIDTH,
+        padding=ft.padding.all(24),
+        border_radius=16,
+        bgcolor=ft.colors.with_opacity(0.06, ft.colors.SURFACE),
     )
 
     return ft.View(
         route="/",
         controls=[
             ft.Container(
-                content=form,
+                content=card,
                 expand=True,
                 alignment=ft.alignment.center,
+                padding=ft.padding.all(16),
             )
         ],
         vertical_alignment=ft.MainAxisAlignment.CENTER,
