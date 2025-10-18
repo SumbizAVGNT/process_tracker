@@ -1,9 +1,15 @@
 # src/process_tracker/core/config.py
 from __future__ import annotations
 
-from typing import List
+import secrets
+from typing import List, Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
+from dotenv import load_dotenv, find_dotenv
+
+# Подхватываем .env из текущей папки или выше (по дереву)
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 class Settings(BaseSettings):
@@ -12,8 +18,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- Secrets / Crypto ---
-    app_secret_key: str
-    crypt_fernet_key: str  # Fernet.generate_key().decode()
+    app_secret_key: Optional[str] = None            # для подписей/сессий
+    crypt_fernet_key: Optional[str] = None          # Fernet.generate_key().decode()
 
     # --- Database (SQLAlchemy async URL) ---
     db_url: str = "sqlite+aiosqlite:///./process_tracker.db"
@@ -21,9 +27,9 @@ class Settings(BaseSettings):
     # Пул и таймауты (для не-SQLite будут применены полностью)
     db_pool_size: int = 5
     db_max_overflow: int = 10
-    db_pool_recycle: int = 1800  # сек
-    db_query_timeout: float = 5.0  # сек, asyncio timeout на запрос
-    db_max_concurrency: int = 20  # ограничение параллельных запросов в БД
+    db_pool_recycle: int = 1800     # сек
+    db_query_timeout: float = 5.0   # сек, asyncio timeout на запрос
+    db_max_concurrency: int = 20    # ограничение параллельных запросов к БД
 
     # --- API Server ---
     api_host: str = "127.0.0.1"
@@ -33,7 +39,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = []
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=".env",                 # всё ещё поддерживаем локальный .env
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
@@ -59,5 +65,26 @@ class Settings(BaseSettings):
     def is_prod(self) -> bool:
         return self.app_env.lower() in {"prod", "production"}
 
+    # Генерируем ключи в DEV, требуем явно в PROD
+    @model_validator(mode="after")
+    def _ensure_keys(self):
+        if not self.app_secret_key:
+            if self.is_dev:
+                # безопасный временный ключ (только для dev)
+                self.app_secret_key = secrets.token_urlsafe(48)
+            else:
+                raise ValueError("APP_SECRET_KEY is required in production")
 
+        if not self.crypt_fernet_key:
+            if self.is_dev:
+                # временный (DEV); для PROD сгенерируй Fernet.generate_key().decode()
+                from cryptography.fernet import Fernet
+                self.crypt_fernet_key = Fernet.generate_key().decode()
+            else:
+                raise ValueError("CRYPT_FERNET_KEY is required in production")
+
+        return self
+
+
+# Импортируемый singleton
 settings = Settings()
