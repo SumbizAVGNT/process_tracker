@@ -1,13 +1,10 @@
-# src/process_tracker/ui/state.py
-"""
-Глобальное состояние UI (клиентская часть Flet).
-
-- Держим признак аутентификации, email пользователя, роли и права
-- Утилиты для проверки ролей/прав с поддержкой wildcard (`task.*`, `admin.*`)
-- Примитивные set_auth()/clear_auth() для экранов login/logout
-"""
-
 from __future__ import annotations
+"""
+Глобальное состояние UI (Flet).
+- Авторизация: email, is_authenticated
+- RBAC: roles, permissions (+ wildcard: "task.*", "admin.*")
+- Контекст: произвольный словарь для межстраничного обмена
+"""
 
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -19,16 +16,19 @@ def _perm_match(perm: str, granted: set[str]) -> bool:
       - точное совпадение: "task.create"
       - подстановки: "task.*"
       - суперправо: "admin.*"
+      - универсальная маска: "*.*" или "*"
     """
-    if perm in granted:
+    p = perm.strip().lower()
+    if p in granted:
         return True
-    # task.create -> task.*
-    parts = perm.split(".")
+
+    parts = p.split(".")
     for i in range(len(parts), 0, -1):
-        star = ".".join(parts[: i - 1] + ["*"])
+        # "task.create" -> "task.*" -> "*"
+        star = ".".join(parts[: i - 1] + ["*"]) if i > 1 else "*"
         if star in granted:
             return True
-    # глобальная маска
+
     return "*.*" in granted or "*" in granted or "admin.*" in granted
 
 
@@ -42,20 +42,20 @@ class AppState:
     roles: list[str] = field(default_factory=list)
     permissions: set[str] = field(default_factory=set)
 
-    # Произвольный UI-контекст (можно использовать страницами)
+    # Общий UI-контекст
     ctx: dict = field(default_factory=dict)
 
     # ---------- RBAC helpers ----------
 
     def has_role(self, role: str) -> bool:
         r = (role or "").strip().lower()
-        return r in (x.lower() for x in self.roles)
+        return any(r == x.strip().lower() for x in self.roles)
 
     def can(self, perm: str) -> bool:
         p = (perm or "").strip().lower()
         if not p:
             return False
-        return _perm_match(p, {x.lower() for x in self.permissions})
+        return _perm_match(p, {x.strip().lower() for x in self.permissions})
 
     # ---------- Auth helpers ----------
 
@@ -69,7 +69,7 @@ class AppState:
         self.user_email = (email or "").strip()
         self.is_authenticated = True
         if roles is not None:
-            self.roles = list(dict.fromkeys([r.strip() for r in roles if r and r.strip()]))  # uniq, keep order
+            self.roles = list(dict.fromkeys([r.strip() for r in roles if r and r.strip()]))  # uniq
         if permissions is not None:
             self.permissions = {p.strip() for p in permissions if p and p.strip()}
 
@@ -78,7 +78,7 @@ class AppState:
         self.is_authenticated = False
         self.roles.clear()
         self.permissions.clear()
-        # Не трогаем ctx — это общий кэш UI
+        # ctx не трогаем — может содержать кэш UI/настроек
 
 
 # Синглтон состояния приложения
