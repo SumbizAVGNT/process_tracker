@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "process-tracker"
+version = "0.1.0"
+description = "Flet веб-приложение: Процесс Трекер"
+authors = ["Teighto <main@teighto.net>"]
+packages = [{ include = "process_tracker", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+flet = "*"
+pydantic-settings = "*"
+SQLAlchemy = ">=2.0"
+aiosqlite = "*"
+alembic = "*"
+passlib = {extras = ["bcrypt"], version = "*"}
+cryptography = "*"
+structlog = "*"
+python-dotenv = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
