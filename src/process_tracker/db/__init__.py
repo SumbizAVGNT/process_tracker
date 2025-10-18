@@ -1,9 +1,8 @@
 # src/process_tracker/db/__init__.py
-
 from __future__ import annotations
 
 from .session import Base, engine, AsyncSessionLocal, get_session  # re-export
-from . import models  # noqa: F401  # регистрируем модели в metadata
+from . import models  # noqa: F401  # регистрируем модели
 
 __all__ = [
     "Base",
@@ -14,19 +13,12 @@ __all__ = [
     "drop_db",
 ]
 
-
 async def init_db() -> None:
-    """
-    Создать все таблицы на основе declarative Base.
-    Использовать в dev/тестах; в prod — Alembic миграции.
-    """
+    """Создать таблицы (для dev/тестов). В проде использовать Alembic."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-
 async def drop_db() -> None:
-    """
-    Удалить все таблицы (Только для dev!).
-    """
+    """Удалить все таблицы (dev only!)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)

@@ -1,5 +1,4 @@
 # src/process_tracker/core/config.py
-
 from __future__ import annotations
 
 from typing import List
@@ -13,15 +12,22 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- Secrets / Crypto ---
-    app_secret_key: str  # для подписей/сессий
+    app_secret_key: str
     crypt_fernet_key: str  # Fernet.generate_key().decode()
 
-    # --- Database ---
-    db_url: str = "sqlite+aiosqlite:///./process_tracker.db"  # SQLAlchemy async URL
+    # --- Database (SQLAlchemy async URL) ---
+    db_url: str = "sqlite+aiosqlite:///./process_tracker.db"
+
+    # Пул и таймауты (для не-SQLite будут применены полностью)
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle: int = 1800  # сек
+    db_query_timeout: float = 5.0  # сек, asyncio timeout на запрос
+    db_max_concurrency: int = 20  # ограничение параллельных запросов в БД
 
     # --- API Server ---
-    api_host: str = "127.0.0.1"  # можно переопределить через ENV API_HOST
-    api_port: int = 8787         # ENV API_PORT
+    api_host: str = "127.0.0.1"
+    api_port: int = 8787
 
     # --- CORS (через CSV в ENV CORS_ORIGINS) ---
     cors_origins: List[str] = []
@@ -29,7 +35,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False,  # переменные из .env не чувствительны к регистру
+        case_sensitive=False,
     )
 
     @field_validator("log_level")
@@ -45,7 +51,6 @@ class Settings(BaseSettings):
             return items
         return v
 
-    # Удобные флаги
     @property
     def is_dev(self) -> bool:
         return self.app_env.lower() in {"dev", "development"}
@@ -55,5 +60,4 @@ class Settings(BaseSettings):
         return self.app_env.lower() in {"prod", "production"}
 
 
-# Импортируемый singleton
 settings = Settings()

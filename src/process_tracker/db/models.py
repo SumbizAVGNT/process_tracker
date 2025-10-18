@@ -1,15 +1,11 @@
 # src/process_tracker/db/models.py
 """
-SQLAlchemy 2.0 (async) модели для «Процесс Трекер».
+Модели SQLAlchemy 2.0 (async) для «Процесс Трекер».
 
-Содержит базовые сущности:
-- User      — пользователь (минимум: email, password_hash, is_active)
-- Process   — процесс (название, описание, статус)
-- Task      — задача (название, флаг выполнения)
-
-SQLite по умолчанию, но модели совместимы с Postgres/MySQL.
+Сущности:
+- User, Process, Task
+- RBAC: Role, Permission, UserRole, RolePermission
 """
-
 from __future__ import annotations
 
 from typing import Optional
@@ -23,8 +19,9 @@ from sqlalchemy import (
     func,
     Index,
     UniqueConstraint,
+    ForeignKey,
 )
-from sqlalchemy.orm import Mapped, mapped_column, declarative_mixin
+from sqlalchemy.orm import Mapped, mapped_column, declarative_mixin, relationship
 
 from .session import Base
 
@@ -47,13 +44,66 @@ class User(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    roles: Mapped[list["Role"]] = relationship(
+        "Role",
+        secondary="user_roles",
+        back_populates="users",
+        lazy="selectin",
+    )
+
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
         Index("ix_users_email", "email"),
     )
 
-    def __repr__(self) -> str:
-        return f"<User id={self.id} email={self.email!r} active={self.is_active}>"
+
+class Role(TimestampMixin, Base):
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # admin, manager, user, viewer
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    users: Mapped[list[User]] = relationship(
+        "User",
+        secondary="user_roles",
+        back_populates="roles",
+        lazy="selectin",
+    )
+    permissions: Mapped[list["Permission"]] = relationship(
+        "Permission",
+        secondary="role_permissions",
+        back_populates="roles",
+        lazy="selectin",
+    )
+
+
+class Permission(TimestampMixin, Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)  # e.g. 'process.read', 'task.create', 'admin.*'
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    dangerous: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    roles: Mapped[list[Role]] = relationship(
+        "Role",
+        secondary="role_permissions",
+        back_populates="permissions",
+        lazy="selectin",
+    )
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
 
 
 class Process(TimestampMixin, Base):
@@ -66,9 +116,6 @@ class Process(TimestampMixin, Base):
 
     __table_args__ = (Index("ix_processes_title", "title"),)
 
-    def __repr__(self) -> str:
-        return f"<Process id={self.id} title={self.title!r} status={self.status!r}>"
-
 
 class Task(TimestampMixin, Base):
     __tablename__ = "tasks"
@@ -78,6 +125,3 @@ class Task(TimestampMixin, Base):
     done: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (Index("ix_tasks_title", "title"),)
-
-    def __repr__(self) -> str:
-        return f"<Task id={self.id} title={self.title!r} done={self.done}>"
