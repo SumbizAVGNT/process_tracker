@@ -12,13 +12,11 @@ import asyncio
 from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base
 from sqlalchemy import event
 from sqlalchemy.engine.url import make_url
 
 from ..core.config import settings
-
-Base = declarative_base()
+from .models import Base  # ВАЖНО: используем единую Base из моделей
 
 # Разбор URL — чтобы отличать sqlite от прочих
 _url = make_url(settings.db_url)
