@@ -1,3 +1,4 @@
+# src/process_tracker/routes/__init__.py
 from __future__ import annotations
 
 from typing import Sequence
@@ -7,13 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from ..core.config import settings
-from .rate_limit import rate_limit  # NEW
+from .rate_limit import rate_limit
+
 
 def build_api() -> FastAPI:
     """
     Собирает FastAPI-приложение.
     Импорт роутеров выполнен ЛЕНИВО внутри функции, чтобы не ломать импорт пакета,
-    даже если tasks.py / ws.py / workflows.py / forms.py ещё не созданы.
+    даже если tasks.py / processes.py / workflows.py / forms.py ещё не созданы.
     """
     app = FastAPI(title="Process Tracker API", version="0.1.0")
 
@@ -33,7 +35,7 @@ def build_api() -> FastAPI:
     async def health():
         return {"ok": True}
 
-    # Ленивая регистрация роутеров (+ зависимость rate_limit)
+    # Ленивая регистрация роутеров (+ зависимость rate_limit для REST)
     try:
         from .tasks import router as tasks_router  # type: ignore
         app.include_router(
@@ -44,7 +46,16 @@ def build_api() -> FastAPI:
         pass
 
     try:
-        from .forms import router as forms_router  # NEW
+        from .processes import router as processes_router  # NEW
+        app.include_router(
+            processes_router, prefix="/api", tags=["processes"],
+            dependencies=[Depends(rate_limit)],
+        )
+    except Exception:
+        pass
+
+    try:
+        from .forms import router as forms_router  # type: ignore
         app.include_router(
             forms_router, prefix="/api", tags=["forms"],
             dependencies=[Depends(rate_limit)],
