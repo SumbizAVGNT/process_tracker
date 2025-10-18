@@ -1,5 +1,3 @@
-# src/process_tracker/ui/pages/dashboard.py
-
 from __future__ import annotations
 
 import flet as ft
@@ -36,19 +34,10 @@ def _stat_card(title: str, value_ref: ft.Text, icon: str) -> ft.Container:
 def view(page: ft.Page) -> ft.View:
     page.title = "Процесс Трекер — дашборд"
 
-    # Заголовок и действия
     title = ft.Text("Дашборд", size=24, weight="bold")
-    subtitle = ft.Text(
-        "Сводка по процессам и задачам",
-        color=ft.colors.ON_SURFACE_VARIANT,
-    )
-    go_tasks_btn = ft.FilledButton(
-        "Перейти к задачам",
-        icon=ft.icons.CHECKLIST,
-        on_click=lambda _: page.go("/processes"),
-    )
+    subtitle = ft.Text("Сводка по процессам и задачам", color=ft.colors.ON_SURFACE_VARIANT)
+    go_tasks_btn = ft.FilledButton("Перейти к задачам", icon=ft.icons.CHECKLIST, on_click=lambda _: page.go("/processes"))
 
-    # Метрики
     tasks_total_val = ft.Text("—", size=20, weight="bold")
     tasks_open_val = ft.Text("—", size=20, weight="bold")
     processes_total_val = ft.Text("—", size=20, weight="bold")
@@ -67,13 +56,14 @@ def view(page: ft.Page) -> ft.View:
         run_spacing=12,
     )
 
-    # Последние действия / placeholder
     activity = ft.Container(
         content=ft.Column(
             [
                 ft.Text("Активность", size=16, weight="bold"),
-                ft.Text("Скоро здесь будет лента событий (создание/обновление задач и процессов)…",
-                        color=ft.colors.ON_SURFACE_VARIANT),
+                ft.Text(
+                    "Скоро здесь будет лента событий (создание/обновление задач и процессов)…",
+                    color=ft.colors.ON_SURFACE_VARIANT,
+                ),
             ],
             spacing=8,
         ),
@@ -82,7 +72,7 @@ def view(page: ft.Page) -> ft.View:
         bgcolor=ft.colors.with_opacity(0.03, ft.colors.SURFACE_VARIANT),
     )
 
-    async def load_stats():
+    async def load_stats(_event=None):
         try:
             async with AsyncSessionLocal() as s:
                 tsvc = TaskService(s)
@@ -102,8 +92,8 @@ def view(page: ft.Page) -> ft.View:
         except Exception as e:  # noqa: BLE001
             toast(page, f"Не удалось загрузить статистику: {e}", kind="error")
 
-    # первичная загрузка
-    page.run_task(load_stats())
+    # первичная загрузка (ВАЖНО: функция, без скобок)
+    page.run_task(load_stats)
 
     return ft.View(
         route="/dashboard",

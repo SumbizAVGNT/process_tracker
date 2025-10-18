@@ -2,8 +2,8 @@
 """
 Расширяемый серверный модуль.
 - Поднимает FastAPI в фоновом потоке (uvicorn).
-- Предоставляет registry для расширений (router'ы, middlewares и т.п.).
-- Экспортирует удобные функции: start_api_server(), stop_api_server(), is_running(), register_extension().
+- Registry для расширений (router'ы, middlewares и т.п.).
+- Старт/стоп/проверка состояния.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from typing import Callable, List, Optional
 import uvicorn
 from fastapi import FastAPI
 
-from ..routes import build_api
 
 # -------- Registry для расширений --------
 _Extension = Callable[[FastAPI], None]
@@ -23,11 +22,7 @@ _extensions: List[_Extension] = []
 
 
 def register_extension(func: _Extension) -> None:
-    """
-    Зарегистрировать расширение, которое получит FastAPI-приложение
-    и сможет навесить роуты, middlewares, события и т.д.
-    Вызывать ДО старта сервера.
-    """
+    """Зарегистрировать расширение (выполнится на этапе сборки FastAPI)."""
     _extensions.append(func)
 
 
@@ -39,10 +34,43 @@ _started = False
 _lock = threading.Lock()
 
 
+def _import_build_api():
+    """
+    Лениво импортируем сборщик API, чтобы не падать при скриптовом запуске,
+    даже если пакет routes ещё не инициализировали/не собрали.
+    """
+    try:
+        # Относительный импорт для пакетного запуска
+        from ..routes import build_api  # type: ignore
+        return build_api
+    except Exception:
+        try:
+            # Абсолютный импорт при ручной правке sys.path
+            from process_tracker.routes import build_api  # type: ignore
+            return build_api
+        except Exception:
+            return None
+
+
 def _build_app() -> FastAPI:
+    build_api = _import_build_api()
+
+    if build_api is None:
+        # Fallback: минимальный API, чтобы приложение не падало
+        app = FastAPI(title="Process Tracker API (fallback)", version="0.1.0")
+
+        @app.get("/health", tags=["system"])
+        async def health():
+            return {"ok": True, "fallback": True}
+
+        # расширения всё равно применим
+        for ext in list(_extensions):
+            ext(app)
+        return app
+
     app = build_api()
 
-    # Базовый health-check (на случай, если его нет в роутерах)
+    # Базовый health-check (на всякий случай)
     @app.get("/health", tags=["system"])
     async def health():
         return {"ok": True}
@@ -93,9 +121,7 @@ def start_api_server(
 
 
 def stop_api_server(join: bool = False, timeout: Optional[float] = 5.0) -> None:
-    """
-    Остановить сервер (graceful). По умолчанию не блокирует вызывающий поток.
-    """
+    """Остановить сервер (graceful)."""
     global _server, _thread, _started
     with _lock:
         srv = _server
@@ -116,10 +142,7 @@ def is_running() -> bool:
 
 
 def get_application() -> FastAPI:
-    """
-    Вернуть инстанс FastAPI (создаст новый, если ещё не создан).
-    Полезно для тестов.
-    """
+    """Вернуть инстанс FastAPI (создаст новый, если ещё не создан)."""
     global _app
     with _lock:
         if _app is None:

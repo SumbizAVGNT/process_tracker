@@ -1,4 +1,3 @@
-# src/process_tracker/ui/components/forms.py
 """
 Набор переиспользуемых UI-компонентов для Flet:
 - async_button(...)        — кнопка, которая безопасно выполняет async-задачу с лоадером
@@ -7,9 +6,10 @@
 - search_input(...)        — поле поиска с on_submit
 - task_editor(...)         — мини-форма создания/редактирования задачи
 """
-
 from __future__ import annotations
 
+import asyncio
+import inspect
 from typing import Callable, Awaitable, Optional
 
 import flet as ft
@@ -24,7 +24,6 @@ def toast(
     kind: str = "info",
     duration: int = 2500,
 ) -> None:
-    """Показать короткое уведомление (SnackBar)."""
     bg_map = {
         "info": ft.colors.BLUE_GREY_700,
         "success": ft.colors.GREEN_700,
@@ -51,9 +50,6 @@ async def confirm_dialog(
     ok_text: str = "Да",
     cancel_text: str = "Отмена",
 ) -> bool:
-    """
-    Показать модальное окно подтверждения и вернуть True/False.
-    """
     result: dict[str, bool] = {"ok": False}
 
     def _on_ok(_):
@@ -80,7 +76,6 @@ async def confirm_dialog(
     dlg.open = True
     page.update()
 
-    # Ожидаем, пока диалог закроется
     while dlg.open:
         await ft.asyncio.sleep(0.05)
 
@@ -100,12 +95,6 @@ def async_button(
     error_message: str = "Ошибка выполнения",
     width: Optional[int] = None,
 ) -> ft.Container:
-    """
-    Кнопка, которая запускает асинхронную задачу через page.run_task,
-    показывает лоадер и дизейблит себя до завершения.
-
-    task_factory: coroutine-without-args — что сделать по нажатию.
-    """
     loader = ft.ProgressRing(visible=False, width=18, height=18)
     btn = ft.FilledButton(
         text=label,
@@ -132,7 +121,8 @@ def async_button(
             btn.update()
             loader.update()
 
-    btn.on_click = lambda _: page.run_task(_run())
+    # ВАЖНО: передаём функцию, без вызова
+    btn.on_click = lambda _: page.run_task(_run)
 
     return ft.Container(
         content=ft.Row(
@@ -153,10 +143,6 @@ def search_input(
     width: int | None = 360,
     autofocus: bool = False,
 ) -> ft.TextField:
-    """
-    Поле поиска; при Enter вызывает on_submit(query).
-    on_submit может быть как sync, так и async.
-    """
     tf = ft.TextField(
         hint_text=placeholder,
         autofocus=autofocus,
@@ -170,9 +156,10 @@ def search_input(
         if not q:
             return
         res = on_submit(q)
-        # поддерживаем как sync, так и async колбек
-        if hasattr(res, "__await__"):
-            page.run_task(res)
+        # Если вернулась корутина — запустим её безопасно
+        if inspect.iscoroutine(res):
+            asyncio.create_task(res)
+
     tf.on_submit = _submit
     return tf
 
@@ -186,10 +173,6 @@ def task_editor(
     label: str = "Новая задача",
     button_text: str = "Добавить",
 ) -> ft.Container:
-    """
-    Небольшая форма добавления задачи.
-    on_save(title) — coroutine.
-    """
     title = ft.TextField(label=label, expand=True)
     add_btn = async_button(
         page,

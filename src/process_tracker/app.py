@@ -1,5 +1,4 @@
 # src/process_tracker/app.py
-
 from __future__ import annotations
 
 import flet as ft
@@ -8,34 +7,31 @@ from .core.config import settings
 from .ui.router import handle_route_change
 from .server import start_api_server
 
-# Dev-bootstrap БД и сид RBAC
-from .db.migration import ensure_alembic_tree, upgrade_head_with_bootstrap
-from .db.session import AsyncSessionLocal
-from .db.seed import seed_rbac
+# --- Flet compatibility shims (разные версии Flet) ---
+if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
+    ft.icons = ft.Icons  # type: ignore[attr-defined]
+if not hasattr(ft, "colors") and hasattr(ft, "Colors"):
+    ft.colors = ft.Colors  # type: ignore[attr-defined]
+if not hasattr(ft, "alignment") and hasattr(ft, "Alignment"):
+    ft.alignment = ft.Alignment  # type: ignore[attr-defined]
 
-
-async def _dev_seed_rbac():
-    try:
-        async with AsyncSessionLocal() as s:
-            await seed_rbac(s)
-        logger.info("rbac_seeded_on_startup")
-    except Exception as e:  # noqa: BLE001
-        logger.warning("rbac_seed_failed", error=str(e))
+# Fallback для отсутствующих цветов/утилит
+if hasattr(ft, "colors"):
+    if not hasattr(ft.colors, "SURFACE_VARIANT"):
+        # тёмно-серый для фона "variant"
+        setattr(ft.colors, "SURFACE_VARIANT", "#2c2c2c")
+    if not hasattr(ft.colors, "SURFACE"):
+        # базовый фон в тёмной теме
+        setattr(ft.colors, "SURFACE", "#121212")
+    if not hasattr(ft.colors, "with_opacity"):
+        # на старых версиях — просто возвращаем цвет без прозрачности
+        def _with_opacity(opacity: float, color: str) -> str:  # type: ignore[override]
+            return color
+        setattr(ft.colors, "with_opacity", staticmethod(_with_opacity))  # type: ignore[misc]
 
 
 def main(page: ft.Page):
-    # Логи
     setup_logging()
-
-    # Dev-инициализация схемы (однократно создаст миграции и накатит)
-    if settings.is_dev:
-        try:
-            ensure_alembic_tree()
-            upgrade_head_with_bootstrap()
-            # сидим RBAC неблокирующе
-            page.run_task(_dev_seed_rbac())
-        except Exception as e:  # noqa: BLE001
-            logger.warning("dev_bootstrap_failed", error=str(e))
 
     # API-сервер FastAPI в фоне
     start_api_server()  # 127.0.0.1:8787
