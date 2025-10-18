@@ -52,28 +52,35 @@ def _import_build_api():
             return None
 
 
+def _ensure_health_once(app: FastAPI) -> None:
+    """Добавить /health, только если его нет."""
+    try:
+        for r in getattr(app.router, "routes", []):
+            if getattr(r, "path", "") == "/health" and "GET" in getattr(r, "methods", set()):
+                return
+    except Exception:
+        pass
+
+    @app.get("/health", tags=["system"])
+    async def health():
+        return {"ok": True}
+
+
 def _build_app() -> FastAPI:
     build_api = _import_build_api()
 
     if build_api is None:
         # Fallback: минимальный API, чтобы приложение не падало
         app = FastAPI(title="Process Tracker API (fallback)", version="0.1.0")
-
-        @app.get("/health", tags=["system"])
-        async def health():
-            return {"ok": True, "fallback": True}
-
-        # расширения всё равно применим
+        _ensure_health_once(app)
         for ext in list(_extensions):
             ext(app)
         return app
 
     app = build_api()
 
-    # Базовый health-check (на всякий случай)
-    @app.get("/health", tags=["system"])
-    async def health():
-        return {"ok": True}
+    # Базовый health-check (только если его ещё нет)
+    _ensure_health_once(app)
 
     # Применяем расширения
     for ext in list(_extensions):
