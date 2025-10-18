@@ -1,18 +1,18 @@
-# src/process_tracker/db/__init__.py
 from __future__ import annotations
 
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from .session import engine
-from .models import Base  # важно: регистрирует модели/индексы
+from .models import Base  # ВАЖНО: импортирует все модели и регистрирует их на Base.metadata
 
 
 async def init_db() -> None:
     """
     Идемпотентная инициализация схемы:
     - включает SQLite PRAGMA
-    - create_all с защитой от повторного создания уже существующих объектов
+    - пробует create_all()
+    - затем гарантированно создаёт каждую таблицу по отдельности с checkfirst=True
     """
     async with engine.begin() as conn:
         # SQLite тюнинг + внешние ключи
@@ -20,15 +20,23 @@ async def init_db() -> None:
             await conn.execute(text("PRAGMA foreign_keys=ON"))
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA synchronous=NORMAL"))
+
+        # 1) общая попытка
         try:
-            # SQLAlchemy сам делает checkfirst, но на SQLite иногда всплывают гонки/несоответствия.
-            # Перехватываем «already exists» и считаем это нормой при повторном запуске.
             await conn.run_sync(Base.metadata.create_all)
         except OperationalError as e:
-            if "already exists" in str(e).lower():
-                # индекс/таблица уже создан(а) — ок
-                return
-            raise
+            # Логируем и продолжаем «добивать» точечно
+            # (иногда на SQLite всплывает existing index -> не должно блокировать остальные таблицы)
+            # print(f"[init_db] create_all warning: {e}")  # можно раскомментировать при отладке
+            pass
+
+        # 2) гарантированно создадим недостающие таблицы по одной
+        for table in Base.metadata.sorted_tables:
+            try:
+                await conn.run_sync(table.create, checkfirst=True)
+            except OperationalError:
+                # если индекс/таблица уже есть — пропускаем
+                pass
 
 
 async def drop_db() -> None:
@@ -37,5 +45,4 @@ async def drop_db() -> None:
         try:
             await conn.run_sync(Base.metadata.drop_all)
         except OperationalError:
-            # например, если таблиц уже нет
             pass

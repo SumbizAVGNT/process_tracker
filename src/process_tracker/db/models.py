@@ -1,127 +1,139 @@
-# src/process_tracker/db/models.py
-"""
-Модели SQLAlchemy 2.0 (async) для «Процесс Трекер».
-
-Сущности:
-- User, Process, Task
-- RBAC: Role, Permission, UserRole, RolePermission
-"""
 from __future__ import annotations
 
-from typing import Optional
+import datetime as dt
+from typing import List, Optional
 
 from sqlalchemy import (
+    Table,
+    Column,
+    ForeignKey,
     String,
-    Integer,
     Boolean,
     DateTime,
-    Text,
-    func,
-    Index,
     UniqueConstraint,
-    ForeignKey,
+    Index,
+    MetaData,
 )
-from sqlalchemy.orm import Mapped, mapped_column, declarative_mixin, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from .session import Base
+# Единая схема имен для кросс-СУБД стабильности названий ограничений/индексов
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+metadata_obj = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-@declarative_mixin
+class Base(DeclarativeBase):
+    metadata = metadata_obj
+
+
+# ---------------------- Mixin'ы ----------------------
+
 class TimestampMixin:
-    created_at: Mapped[Optional[DateTime]] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc), nullable=False
     )
-    updated_at: Mapped[Optional[DateTime]] = mapped_column(
-        DateTime(timezone=True), onupdate=func.now(), nullable=True
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: dt.datetime.now(dt.timezone.utc),
+        onupdate=lambda: dt.datetime.now(dt.timezone.utc),
+        nullable=False,
     )
 
 
-class User(TimestampMixin, Base):
-    __tablename__ = "users"
+# ---------------------- Ассоциации ----------------------
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+user_roles = Table(
+    "user_roles",
+    Base.metadata,
+    Column("user_id", ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_id", ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
+)
 
-    roles: Mapped[list["Role"]] = relationship(
-        "Role",
-        secondary="user_roles",
-        back_populates="users",
+role_permissions = Table(
+    "role_permissions",
+    Base.metadata,
+    Column("role_id", ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
+    Column("permission_id", ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+# ---------------------- RBAC ----------------------
+
+class Permission(TimestampMixin, Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(String(255), default=None)
+    dangerous: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    roles: Mapped[List["Role"]] = relationship(
+        back_populates="permissions",
+        secondary=role_permissions,
         lazy="selectin",
-    )
-
-    __table_args__ = (
-        UniqueConstraint("email", name="uq_users_email"),
-        Index("ix_users_email", "email"),
     )
 
 
 class Role(TimestampMixin, Base):
     __tablename__ = "roles"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # admin, manager, user, viewer
-    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(String(255), default=None)
 
-    users: Mapped[list[User]] = relationship(
-        "User",
-        secondary="user_roles",
+    permissions: Mapped[List["Permission"]] = relationship(
         back_populates="roles",
+        secondary=role_permissions,
         lazy="selectin",
     )
-    permissions: Mapped[list["Permission"]] = relationship(
-        "Permission",
-        secondary="role_permissions",
+    users: Mapped[List["User"]] = relationship(
         back_populates="roles",
+        secondary=user_roles,
         lazy="selectin",
     )
 
 
-class Permission(TimestampMixin, Base):
-    __tablename__ = "permissions"
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)  # e.g. 'process.read', 'task.create', 'admin.*'
-    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    dangerous: Mapped[bool] = mapped_column(Boolean, default=False)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
 
-    roles: Mapped[list[Role]] = relationship(
-        "Role",
-        secondary="role_permissions",
-        back_populates="permissions",
+    roles: Mapped[List[Role]] = relationship(
+        back_populates="users",
+        secondary=user_roles,
         lazy="selectin",
     )
 
 
-class UserRole(Base):
-    __tablename__ = "user_roles"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+# ---------------------- Domain: Tasks / Processes ----------------------
 
+class Task(TimestampMixin, Base):
+    __tablename__ = "tasks"
 
-class RolePermission(Base):
-    __tablename__ = "role_permissions"
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
-    permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200))
+    done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        Index("ix_tasks_title", "title"),
+    )
 
 
 class Process(TimestampMixin, Base):
     __tablename__ = "processes"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    title: Mapped[str] = mapped_column(String(200), index=True)
-    description: Mapped[Optional[str]] = mapped_column(Text())
-    status: Mapped[str] = mapped_column(String(50), default="new")
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="new", nullable=False)
 
-    __table_args__ = (Index("ix_processes_title", "title"),)
-
-
-class Task(TimestampMixin, Base):
-    __tablename__ = "tasks"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    title: Mapped[str] = mapped_column(String(200), index=True)
-    done: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    __table_args__ = (Index("ix_tasks_title", "title"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_processes_name"),
+    )
