@@ -8,14 +8,19 @@ packages = [{ include = "process_tracker", from = "src" }]
 [tool.poetry.dependencies]
 python = "^3.10"
 flet = "*"
+fastapi = "*"
+uvicorn = { extras = ["standard"], version = "*" }
 pydantic-settings = "*"
 SQLAlchemy = ">=2.0"
 aiosqlite = "*"
 alembic = "*"
-passlib = {extras = ["bcrypt"], version = "*"}
+passlib = { extras = ["bcrypt"], version = "*" }
 cryptography = "*"
 structlog = "*"
 python-dotenv = "*"
+
+[tool.poetry.scripts]
+process-tracker = "process_tracker.main:run"
 
 [build-system]
 requires = ["poetry-core"]
