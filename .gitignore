@@ -17,6 +17,7 @@ env/
 build/
 dist/
 *.egg-info/
+*.spec  # pyinstaller/flet pack spec
 
 # IDE / Editor
 .idea/
@@ -30,22 +31,44 @@ Thumbs.db
 # Logs
 logs/
 *.log
+*.log.*
 
 # Databases (local)
 *.db
 *.sqlite
 *.sqlite3
+# SQLite runtime artifacts
+*-journal
+*-wal
+*-shm
 
 # Test / tooling caches
 .mypy_cache/
 .pytest_cache/
 .pyre/
+.pytype/
+.ruff_cache/
+.tox/
+.nox/
 .cache/
 
 # Coverage
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
 
 # Keys (local)
 *.key
 *.pem
+
+# Other env/tooling you don't use in this project
+Pipfile
+Pipfile.lock
+
+# Temp
+tmp/
+temp/
