@@ -1,0 +1,11 @@
+flet
+fastapi
+uvicorn[standard]
+SQLAlchemy>=2
+aiosqlite
+alembic
+pydantic-settings
+passlib[bcrypt]
+cryptography
+structlog
+python-dotenv
