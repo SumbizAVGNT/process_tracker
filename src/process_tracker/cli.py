@@ -3,28 +3,29 @@
 Process Tracker — CLI (stdlib argparse)
 
 Запуск:
+  # из корня проекта (предпочтительно)
   python -m process_tracker.cli --help
-
-DB/миграции:
   python -m process_tracker.cli init-db
-  python -m process_tracker.cli drop-db
   python -m process_tracker.cli seed-rbac
-  python -m process_tracker.cli migrate              # upgrade head (bootstrap если нет ревизий)
-  python -m process_tracker.cli upgrade --to head
-  python -m process_tracker.cli downgrade --to -1
-  python -m process_tracker.cli current
-  python -m process_tracker.cli revision -m "init"
+  python -m process_tracker.cli create-user --email you@example.com --password-prompt
 
-Пользователи:
-  python -m process_tracker.cli create-user --email user@example.com --role user --role manager --admin
-  # Пароль будет спрошен интерактивно (или передай --password "..." или --password-prompt)
-
-Серверы:
-  python -m process_tracker.cli run-api --host 0.0.0.0 --port 8787
-  python -m process_tracker.cli run-app
+  # как скрипт из src/process_tracker/
+  python cli.py init-db
 """
 
 from __future__ import annotations
+
+# ---------- shim: поддержка прямого запуска файла (без установки пакета) ----------
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):
+    file = Path(__file__).resolve()
+    src_dir = file.parents[1]          # .../src
+    project_root = file.parents[2]     # корень проекта
+    for p in (str(src_dir), str(project_root)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
 import argparse
 import asyncio
@@ -32,51 +33,57 @@ import getpass
 import logging
 from typing import Optional
 
-import uvicorn
 
-from process_tracker.core.logging import setup_logging, logger
-from process_tracker.core.config import settings
-from process_tracker.core.security import hash_password
-from process_tracker.db import init_db, drop_db
-from process_tracker.db.session import AsyncSessionLocal
-from process_tracker.db.seed import seed_rbac
-from process_tracker.db.migration import (
-    ensure_alembic_tree,
-    upgrade_head_with_bootstrap,
-    upgrade as alembic_upgrade,
-    downgrade as alembic_downgrade,
-    revision as alembic_revision,
-    current as alembic_current,
-)
-from process_tracker.db.dal.user_repo import UserRepo
-from process_tracker.db.dal.role_repo import RoleRepo
-from process_tracker.server import get_application
-from process_tracker.app import run as run_flet_app
+# ---------- Вспомогательные ленивые импорты ----------
+def _settings():
+    from process_tracker.core.config import settings
+    return settings
+
+def _logging():
+    from process_tracker.core.logging import setup_logging, logger
+    return setup_logging, logger
 
 
-# ---------------------- DB / SEED ----------------------
+# ---------- Команды ----------
 
 async def cmd_init_db(_args) -> None:
+    from process_tracker.db import init_db
+    setup_logging, logger = _logging()
     await init_db()
-    logger.info("db_initialized", url=settings.db_url)
+    logger.info("db_initialized", url=_settings().db_url)
 
 
 async def cmd_drop_db(_args) -> None:
+    from process_tracker.db import drop_db
+    setup_logging, logger = _logging()
     await drop_db()
-    logger.info("db_dropped", url=settings.db_url)
+    logger.info("db_dropped", url=_settings().db_url)
 
 
 async def cmd_seed_rbac(_args) -> None:
+    from process_tracker.db.session import AsyncSessionLocal
+    from process_tracker.db.seed import seed_rbac
+    setup_logging, logger = _logging()
     async with AsyncSessionLocal() as session:
         await seed_rbac(session)
     logger.info("rbac_seeded")
 
 
-# ---------------------- Alembic ----------------------
-
 def cmd_migrate(args) -> None:
+    """alembic upgrade head (bootstrap при первом запуске)."""
+    try:
+        from process_tracker.db.migration import (
+            ensure_alembic_tree,
+            upgrade_head_with_bootstrap,
+            upgrade as alembic_upgrade,
+        )
+    except ModuleNotFoundError:
+        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        raise SystemExit(1)
+
+    setup_logging, logger = _logging()
     ensure_alembic_tree()
-    if args.bootstrap:
+    if getattr(args, "bootstrap", True):
         upgrade_head_with_bootstrap()
     else:
         alembic_upgrade(args.to or "head")
@@ -84,23 +91,46 @@ def cmd_migrate(args) -> None:
 
 
 def cmd_upgrade(args) -> None:
+    try:
+        from process_tracker.db.migration import ensure_alembic_tree, upgrade as alembic_upgrade
+    except ModuleNotFoundError:
+        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        raise SystemExit(1)
+    setup_logging, logger = _logging()
     ensure_alembic_tree()
     alembic_upgrade(args.to or "head")
     logger.info("alembic_upgrade_done", to=args.to or "head")
 
 
 def cmd_downgrade(args) -> None:
+    try:
+        from process_tracker.db.migration import ensure_alembic_tree, downgrade as alembic_downgrade
+    except ModuleNotFoundError:
+        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        raise SystemExit(1)
+    setup_logging, logger = _logging()
     ensure_alembic_tree()
     alembic_downgrade(args.to or "-1")
     logger.info("alembic_downgrade_done", to=args.to or "-1")
 
 
 def cmd_current(_args) -> None:
+    try:
+        from process_tracker.db.migration import ensure_alembic_tree, current as alembic_current
+    except ModuleNotFoundError:
+        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        raise SystemExit(1)
     ensure_alembic_tree()
     alembic_current(verbose=True)
 
 
 def cmd_revision(args) -> None:
+    try:
+        from process_tracker.db.migration import ensure_alembic_tree, revision as alembic_revision
+    except ModuleNotFoundError:
+        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        raise SystemExit(1)
+    setup_logging, logger = _logging()
     ensure_alembic_tree()
     msg = args.message or "change"
     autogen = not args.no_autogenerate
@@ -108,20 +138,18 @@ def cmd_revision(args) -> None:
     logger.info("alembic_revision_created", message=msg, autogenerate=autogen)
 
 
-# ---------------------- Users ----------------------
-
 async def cmd_create_user(args) -> None:
-    """
-    Создать пользователя и назначить роли.
-    Безопасность:
-      - пароль читаем из stdin (getpass) по умолчанию, чтобы не светить в истории
-      - хэшируем bcrypt (passlib)
-    """
+    from process_tracker.core.security import hash_password
+    from process_tracker.db.session import AsyncSessionLocal
+    from process_tracker.db.dal.user_repo import UserRepo
+    from process_tracker.db.dal.role_repo import RoleRepo
+
+    setup_logging, logger = _logging()
+
     email: str = args.email.strip().lower()
     if "@" not in email or "." not in email:
         raise SystemExit("Неверный email")
 
-    # Пароль: либо из аргумента, либо интерактивный ввод, либо явный prompt
     password = args.password
     if args.password_prompt or not password:
         while True:
@@ -132,11 +160,10 @@ async def cmd_create_user(args) -> None:
                 continue
             password = p1
             break
-
     if not password or len(password) < 6:
         raise SystemExit("Пароль должен быть длиной не менее 6 символов")
 
-    roles: list[str] = [r.strip().lower() for r in (args.role or []) if r.strip()]
+    roles: list[str] = [r.strip().lower() for r in (args.role or []) if r and r.strip()]
     if args.admin and "admin" not in roles:
         roles.append("admin")
     if not roles:
@@ -157,7 +184,6 @@ async def cmd_create_user(args) -> None:
             user = await urepo.create(email=email, password_hash=hash_password(password))
             logger.info("user_created", email=email, id=getattr(user, "id", None))
 
-        # Назначаем роли (создаём недостающие)
         assigned = []
         for role_name in roles:
             role = await rrepo.get_by_name(role_name)
@@ -171,22 +197,22 @@ async def cmd_create_user(args) -> None:
         logger.info("user_roles_updated", email=email, roles=[r.name for r in user.roles], newly_assigned=assigned)
 
 
-# ---------------------- Servers ----------------------
-
 def cmd_run_api(args) -> None:
+    import uvicorn
+    from process_tracker.server import get_application
+    settings = _settings()
     host = args.host or settings.api_host
     port = int(args.port or settings.api_port)
     log_level = (args.log_level or settings.log_level).lower()
-
-    app = get_application()
-    uvicorn.run(app, host=host, port=port, log_level=log_level)
+    uvicorn.run(get_application(), host=host, port=port, log_level=log_level)
 
 
 def cmd_run_app(_args) -> None:
+    from process_tracker.app import run as run_flet_app
     run_flet_app()
 
 
-# ---------------------- Parser ----------------------
+# ---------- Parser ----------
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="process-tracker", description="Process Tracker CLI")
@@ -221,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Users
     p_user = sub.add_parser("create-user", help="Создать пользователя и назначить роли")
     p_user.add_argument("--email", required=True, help="Email пользователя")
-    p_user.add_argument("--password", default=None, help="Пароль (небезопасно хранить в истории, лучше --password-prompt)")
+    p_user.add_argument("--password", default=None, help="Пароль (лучше --password-пrompt)")
     p_user.add_argument("--password-prompt", action="store_true", help="Запросить пароль интерактивно")
     p_user.add_argument("--role", action="append", help="Роль (можно несколько: --role user --role manager)")
     p_user.add_argument("--admin", action="store_true", help="Также назначить роль admin")
@@ -241,11 +267,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
+    setup_logging, logger = _logging()
     setup_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
-    # Стандартный logging root для совместимости с uvicorn/fastapi
-    logging.getLogger().setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
+    logging.getLogger().setLevel(getattr(logging, _settings().log_level.upper(), logging.INFO))
     logger.info("cli_start", cmd=args.cmd)
     args.func(args)
 
