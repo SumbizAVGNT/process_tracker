@@ -1,22 +1,38 @@
 from __future__ import annotations
+
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Role
+from .base import BaseRepo
+from ..models import Role, Permission
 
 
-class RoleRepo:
+class RoleRepo(BaseRepo):
     def __init__(self, session: AsyncSession) -> None:
-        self.s = session
+        super().__init__(session)
 
-    async def get_by_name(self, name: str) -> Optional[Role]:
-        res = await self.s.execute(select(Role).where(Role.name == name))
-        return res.scalars().first()
+    async def get_by_code(self, code: str) -> Optional[Role]:
+        async with self._guard():
+            res = await self._await_timeout(self.session.execute(select(Role).where(Role.code == code)))
+            return res.scalars().first()
 
-    async def create(self, name: str, description: str | None = None) -> Role:
-        obj = Role(name=name, description=description)
-        self.s.add(obj)
-        await self.s.flush()
-        return obj
+    async def create(self, code: str, title: str | None = None, description: str | None = None) -> Role:
+        async with self._guard():
+            obj = Role(code=code, title=title or code.title(), description=description)
+            self.session.add(obj)
+            await self._await_timeout(self.session.flush())
+            return obj
+
+    async def ensure(self, code: str, title: str | None = None, description: str | None = None) -> Role:
+        role = await self.get_by_code(code)
+        if role:
+            return role
+        return await self.create(code=code, title=title, description=description)
+
+    async def grant(self, role: Role, perm: Permission) -> None:
+        async with self._guard():
+            if perm not in role.permissions:
+                role.permissions.append(perm)
+                await self._await_timeout(self.session.flush())
