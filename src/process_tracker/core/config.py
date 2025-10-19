@@ -1,89 +1,81 @@
+# src/process_tracker/core/config.py
 from __future__ import annotations
 
+import base64
+import os
 import secrets
-from typing import List, Optional
+from pathlib import Path
 
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator, model_validator
-from dotenv import load_dotenv, find_dotenv
 
-# Подхватываем .env из текущей папки или выше (по дереву)
-load_dotenv(find_dotenv(usecwd=True), override=False)
+# --- Найти и подгрузить .env из КОРНЯ проекта независимо от CWD ---
+# config.py -> core -> process_tracker -> src -> <PROJECT_ROOT>
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+ENV_PATH = PROJECT_ROOT / ".env"
+try:
+    from dotenv import load_dotenv  # type: ignore
+    if ENV_PATH.exists():
+        load_dotenv(dotenv_path=ENV_PATH, override=False)
+except Exception:
+    # dotenv не обязателен — просто игнорируем, если не установлен
+    pass
+
+
+def _dev_secret() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def _dev_fernet_key() -> str:
+    return base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
 
 
 class Settings(BaseSettings):
-    # --- App / Env ---
-    app_env: str = "dev"  # dev | prod | test
+    # Общие
+    app_name: str = "process-tracker"
+    app_env: str = "dev"
     log_level: str = "INFO"
 
-    # --- Secrets / Crypto ---
-    app_secret_key: Optional[str] = None            # для подписей/сессий
-    crypt_fernet_key: Optional[str] = None          # Fernet.generate_key().decode()
+    # Secrets (дефолты для dev, чтобы не падать без .env)
+    app_secret_key: str = Field(default_factory=_dev_secret)
+    crypt_fernet_key: str = Field(default_factory=_dev_fernet_key)
 
-    # --- Database (SQLAlchemy async URL) ---
-    db_url: str = "sqlite+aiosqlite:///./process_tracker.db"
-
-    # Пул и таймауты (для не-SQLite будут применены полностью)
-    db_pool_size: int = 5
-    db_max_overflow: int = 10
-    db_pool_recycle: int = 1800     # сек
-    db_query_timeout: float = 5.0   # сек, asyncio timeout на запрос
-    db_max_concurrency: int = 20    # ограничение параллельных запросов к БД
-
-    # --- API Server ---
+    # API
     api_host: str = "127.0.0.1"
     api_port: int = 8787
+    cors_origins: list[str] = Field(default_factory=list)
 
-    # --- CORS (через CSV в ENV CORS_ORIGINS) ---
-    cors_origins: List[str] = []
+    # DB
+    # относительный путь будет резолвиться к PROJECT_ROOT (см. db_url_resolved)
+    db_url: str = "sqlite+aiosqlite:///./process_tracker.db"
+    db_echo: bool = False
+    db_query_timeout: float = 10.0
+    db_max_concurrency: int = 8  # 🔹 ограничение параллельных запросов (для семафора)
+
+    # Служебное
+    project_root: Path = Field(default_factory=lambda: PROJECT_ROOT)
 
     model_config = SettingsConfigDict(
-        env_file=".env",                 # всё ещё поддерживаем локальный .env
+        env_file=str(ENV_PATH),
         env_file_encoding="utf-8",
+        extra="ignore",
         case_sensitive=False,
     )
 
-    @field_validator("log_level")
-    @classmethod
-    def _upper_log_level(cls, v: str) -> str:
-        return (v or "INFO").upper()
-
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def _split_csv(cls, v):
-        if isinstance(v, str):
-            items = [s.strip() for s in v.split(",") if s.strip()]
-            return items
-        return v
-
+    @computed_field
     @property
-    def is_dev(self) -> bool:
-        return self.app_env.lower() in {"dev", "development"}
-
-    @property
-    def is_prod(self) -> bool:
-        return self.app_env.lower() in {"prod", "production"}
-
-    # Генерируем ключи в DEV, требуем явно в PROD
-    @model_validator(mode="after")
-    def _ensure_keys(self):
-        if not self.app_secret_key:
-            if self.is_dev:
-                # безопасный временный ключ (только для dev)
-                self.app_secret_key = secrets.token_urlsafe(48)
-            else:
-                raise ValueError("APP_SECRET_KEY is required in production")
-
-        if not self.crypt_fernet_key:
-            if self.is_dev:
-                # временный (DEV); для PROD сгенерируй Fernet.generate_key().decode()
-                from cryptography.fernet import Fernet
-                self.crypt_fernet_key = Fernet.generate_key().decode()
-            else:
-                raise ValueError("CRYPT_FERNET_KEY is required in production")
-
-        return self
+    def db_url_resolved(self) -> str:
+        """
+        Если указан относительный SQLite URL вида sqlite+aiosqlite:///./file.db,
+        превращаем его в абсолютный путь относительно project_root.
+        """
+        url = (self.db_url or "").strip()
+        prefix = "sqlite+aiosqlite:///./"
+        if url.startswith(prefix):
+            rel = url[len(prefix) :]
+            abs_path = (self.project_root / rel).resolve()
+            return f"sqlite+aiosqlite:///{abs_path.as_posix()}"
+        return url
 
 
-# Импортируемый singleton
 settings = Settings()

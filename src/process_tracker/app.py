@@ -1,11 +1,14 @@
 # src/process_tracker/app.py
 from __future__ import annotations
 
+import asyncio
 import flet as ft
+
 from .core.logging import setup_logging, logger
 from .core.config import settings
 from .ui.router import handle_route_change
 from .server import start_api_server
+from .db import init_db  # ⬅️ авто-инициализация схемы БД
 
 # --- Flet compatibility shims (версии отличаются именами) ---
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -40,7 +43,6 @@ def _ensure_icon(name: str, *fallbacks: str) -> None:
         if hasattr(ns, fb):
             setattr(ns, name, getattr(ns, fb))
             return
-    # последний шанс — INFO
     if hasattr(ns, "INFO"):
         setattr(ns, name, getattr(ns, "INFO"))
 
@@ -49,37 +51,28 @@ _ensure_icon("PENDING_ACTION", "SCHEDULE", "HOURGLASS_EMPTY", "HOURGLASS_TOP_OUT
 _ensure_icon("TASK_ALT_OUTLINED", "TASK_ALT", "CHECK_CIRCLE")
 _ensure_icon("ROCKET_LAUNCH", "ROCKET_LAUNCH_OUTLINED", "ROCKET", "PLAY_ARROW")
 
-
 def main(page: ft.Page):
     setup_logging()
 
-    # API-сервер FastAPI в фоне (без падения приложения при ошибке)
+    # ⬇️ ОБЯЗАТЕЛЬНО: гарантируем схему БД ДО старта UI/роутинга
     try:
-        start_api_server()  # 127.0.0.1:8787
-    except Exception as e:  # noqa: BLE001
-        logger.warning("api_server_start_failed", error=str(e))
+        asyncio.run(init_db())  # idempotent: create_all(checkfirst=True)
+        logger.info("db_auto_initialized", url=settings.db_url_resolved)
+    except Exception:
+        logger.exception("db_auto_init_failed")
 
-    # Параметры окна/приложения
+    # API-сервер FastAPI в фоне (127.0.0.1:8787)
+    start_api_server()
+
     page.title = "Процесс Трекер"
     page.theme_mode = ft.ThemeMode.DARK
-    page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
-    page.vertical_alignment = ft.MainAxisAlignment.START
-    page.padding = 0
-    if hasattr(ft, "colors"):
-        page.bgcolor = getattr(ft.colors, "SURFACE", None)
-
-    # Навигация без дерганий — см. ui/router.ensure_shell()
     page.on_route_change = lambda r: handle_route_change(page)
 
     logger.info("app_started", env=settings.app_env)
-
-    # Инициализируем маршрут аккуратно
     page.go(page.route or "/")
-
 
 def run():
     ft.app(target=main, view=ft.AppView.WEB_BROWSER)
-
 
 if __name__ == "__main__":
     run()

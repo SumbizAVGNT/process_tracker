@@ -1,96 +1,88 @@
 from __future__ import annotations
-
 import flet as ft
-
-from ..components.navbar import navbar
-from ..components.forms import task_editor, confirm_dialog, toast
+from typing import List
+from sqlalchemy import select, desc
 from ...db.session import AsyncSessionLocal
-from ...services.task_service import TaskService
-from ...core.events import events
+from ...db.models import Process
+from ...services.process_service import ProcessService
+from ..components.forms import task_editor, confirm_dialog, toast, async_button
+from ..components.navbar import navbar
 
+def _tile(page: ft.Page, item: Process, on_delete) -> ft.ListTile:
+    subt = (item.description or "").strip() or "—"
+    return ft.ListTile(
+        leading=ft.Icon(ft.icons.TASK_ALT_OUTLINED),
+        title=ft.Text(item.title, weight="w600"),
+        subtitle=ft.Text(f"{subt}  •  статус: {getattr(item, 'status', 'new')}"),
+        trailing=ft.IconButton(
+            icon=ft.icons.DELETE_OUTLINE, tooltip="Удалить",
+            on_click=lambda _e, pid=item.id: on_delete(pid),
+        ),
+        data=item.id,
+    )
 
 def view(page: ft.Page) -> ft.View:
-    page.title = "Процесс Трекер — задачи"
+    page.title = "Процессы — Process Tracker"
 
-    title = ft.Text("Задачи", size=24, weight="bold")
-    subtitle = ft.Text(
-        "Создавай, отмечай выполненные и удаляй — всё обновляется live.",
-        color=ft.colors.ON_SURFACE_VARIANT,
-    )
+    lst = ft.ListView(expand=True, spacing=4, padding=0, auto_scroll=False)
 
-    list_view = ft.ListView(expand=1, spacing=6, padding=6, auto_scroll=False)
+    async def refresh():
+        lst.controls.clear()
+        async with AsyncSessionLocal() as s:
+            svc = ProcessService(s)
+            items: List[Process] = await svc.get_recent(limit=100)
+        for it in items:
+            lst.controls.append(_tile(page, it, on_delete))
+        try:
+            lst.update()
+        except Exception:
+            pass
 
-    async def add_task_handler(name: str):
-        name = (name or "").strip()
-        if not name:
-            toast(page, "Введите название задачи", kind="warn")
+    async def add_process(title: str):
+        t = (title or "").strip()
+        if not t:
+            toast(page, "Название не должно быть пустым", kind="warning")
             return
         async with AsyncSessionLocal() as s:
-            await TaskService(s).create(name)
+            svc = ProcessService(s)
+            await svc.create(t, description=None, status="new")
+        await refresh()
+        toast(page, "Процесс создан", kind="success")
 
-    editor = task_editor(page, on_save=add_task_handler, label="Новая задача", button_text="Добавить")
-
-    def _task_row(task_id: int, title: str, done: bool) -> ft.Row:
-        checkbox = ft.Checkbox(value=done, label=f"#{task_id}  {title}", expand=True)
-        delete_btn = ft.IconButton(icon=ft.icons.DELETE_OUTLINE, tooltip="Удалить")
-
-        async def toggle_done(_event):
-            async with AsyncSessionLocal() as s:
-                ok = await TaskService(s).set_done(task_id, checkbox.value)
-            if not ok:
-                toast(page, "Задача не найдена (возможно, уже удалена)", kind="warn")
-
-        async def delete_task(_event):
-            if await confirm_dialog(page, title="Удалить задачу", text=f"Удалить «{title}»?"):
-                async with AsyncSessionLocal() as s:
-                    removed = await TaskService(s).remove(task_id)
-                if not removed:
-                    toast(page, "Задача не найдена (возможно, уже удалена)", kind="warn")
-
-        # ВАЖНО: передаём функцию, а не вызов
-        checkbox.on_change = lambda e: page.run_task(toggle_done, e)
-        delete_btn.on_click = lambda e: page.run_task(delete_task, e)
-
-        return ft.Row([checkbox, delete_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-
-    async def load_tasks(_event=None):
+    async def on_delete(pid: int):
+        if not await confirm_dialog(page, text="Удалить процесс?", ok_text="Удалить"):
+            return
         async with AsyncSessionLocal() as s:
-            tasks = await TaskService(s).list()
-        list_view.controls = [_task_row(t.id, t.title, t.done) for t in tasks]
-        page.update()
+            obj = await s.get(Process, pid)
+            if obj:
+                await s.delete(obj)
+                await s.commit()
+        await refresh()
+        toast(page, "Удалено", kind="success")
 
-    async def watch_events():
-        q = await events.subscribe()
-        try:
-            while True:
-                ev = await q.get()
-                if isinstance(ev, dict) and str(ev.get("type", "")).startswith("task_"):
-                    await load_tasks()
-        finally:
-            await events.unsubscribe(q)
-
-    # первичная загрузка и подписка (ВАЖНО: функции, без скобок)
-    page.run_task(load_tasks)
-    page.run_task(watch_events)
-
-    content = ft.Column(
+    header = ft.Row(
         [
-            ft.Row([title], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            subtitle,
-            ft.Divider(height=12, color="transparent"),
-            editor,
-            ft.Container(list_view, expand=True),
+            ft.Text("Процессы", size=18, weight="w700"),
+            ft.Container(expand=1),
+            async_button(page, "Обновить", task_factory=refresh, icon=ft.icons.REFRESH),
         ],
-        expand=True,
-        spacing=10,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
-    return ft.View(
-        route="/processes",
-        controls=[
-            navbar(page),
-            ft.Container(content=content, padding=ft.padding.symmetric(16, 18), expand=True),
+    body = ft.Column(
+        [
+            navbar(page, "/processes"),
+            ft.Container(height=8),
+            header,
+            ft.Container(height=6),
+            task_editor(page, on_save=add_process, label="Новый процесс", button_text="Добавить"),
+            ft.Container(height=10),
+            lst,
         ],
-        vertical_alignment=ft.MainAxisAlignment.START,
-        horizontal_alignment=ft.CrossAxisAlignment.START,
+        expand=True, spacing=10,
     )
+
+    # первичная загрузка
+    page.run_task(refresh)
+
+    return ft.View(route="/processes", controls=[ft.Container(content=body, expand=True, padding=16)])

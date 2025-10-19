@@ -1,49 +1,59 @@
 from __future__ import annotations
 
-from typing import List, Optional
-from datetime import datetime
+from typing import Sequence, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.session import get_session
-from ..services.process_service import ProcessService
+from ..db.session import AsyncSessionLocal
+from ..db.models import Process
 
-router = APIRouter(tags=["processes"])
 
-class ProcessIn(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=4000)
-    status: str = Field(default="new", max_length=50)
+class ProcessService:
+    """
+    Сервис работы с процессами. Сам управляет жизненным циклом сессии,
+    используя фабрику AsyncSessionLocal.
+    """
 
-class ProcessOut(BaseModel):
-    id: int
-    title: str
-    description: Optional[str] = None
-    status: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    def __init__(self, session_factory=AsyncSessionLocal) -> None:
+        self._session_factory = session_factory
 
-def _svc(session: AsyncSession = Depends(get_session)) -> ProcessService:
-    return ProcessService(session)
+    async def count_all(self) -> int:
+        async with self._session_factory() as session:  # type: AsyncSession
+            res = await session.execute(select(func.count(Process.id)))
+            return int(res.scalar_one())
 
-@router.get("/processes", response_model=List[ProcessOut])
-async def list_processes(svc: ProcessService = Depends(_svc)):
-    items = await svc.get_recent()
-    return [ProcessOut.model_validate({
-        "id": i.id, "title": i.title, "description": getattr(i, "description", None),
-        "status": getattr(i, "status", "new"),
-        "created_at": getattr(i, "created_at", None),
-        "updated_at": getattr(i, "updated_at", None),
-    }) for i in items]
+    async def list_recent(self, limit: int = 50) -> Sequence[Process]:
+        async with self._session_factory() as session:  # type: AsyncSession
+            res = await session.execute(
+                select(Process).order_by(desc(Process.created_at)).limit(max(1, limit))
+            )
+            return list(res.scalars().all())
 
-@router.post("/processes", response_model=ProcessOut, status_code=status.HTTP_201_CREATED)
-async def create_process(body: ProcessIn, svc: ProcessService = Depends(_svc)):
-    item = await svc.create(body.title.strip(), body.description, body.status)
-    return ProcessOut(
-        id=item.id, title=item.title, description=getattr(item, "description", None),
-        status=getattr(item, "status", "new"),
-        created_at=getattr(item, "created_at", None),
-        updated_at=getattr(item, "updated_at", None),
-    )
+    # совместимость, если где-то вызывали get_recent()
+    async def get_recent(self, limit: int = 50) -> Sequence[Process]:
+        return await self.list_recent(limit=limit)
+
+    async def get(self, process_id: int) -> Optional[Process]:
+        async with self._session_factory() as session:  # type: AsyncSession
+            return await session.get(Process, process_id)
+
+    async def create(
+        self,
+        title: str,
+        description: Optional[str] = None,
+        status: str = "new",
+    ) -> Process:
+        title = (title or "").strip()
+        if not title:
+            raise ValueError("title is required")
+
+        async with self._session_factory() as session:  # type: AsyncSession
+            obj = Process(title=title, description=description, status=status)
+            session.add(obj)
+            await session.commit()
+            await session.refresh(obj)
+            return obj
+
+
+__all__ = ["ProcessService"]

@@ -1,48 +1,60 @@
+# src/process_tracker/db/__init__.py
 from __future__ import annotations
 
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from .session import engine
-from .models import Base  # ВАЖНО: импортирует все модели и регистрирует их на Base.metadata
+from .models import Base  # Важно: импортирует все модели, регистрируя их в Base.metadata
+
+__all__ = ["init_db", "drop_db"]
 
 
 async def init_db() -> None:
     """
     Идемпотентная инициализация схемы:
-    - включает SQLite PRAGMA
-    - пробует create_all()
-    - затем гарантированно создаёт каждую таблицу по отдельности с checkfirst=True
+      - включает SQLite PRAGMA
+      - пробует Base.metadata.create_all()
+      - гарантированно создаёт каждую таблицу отдельно с checkfirst=True
     """
     async with engine.begin() as conn:
-        # SQLite тюнинг + внешние ключи
+        # SQLite: включаем внешние ключи и мягкий тюнинг
         if engine.url.get_backend_name().startswith("sqlite"):
-            await conn.execute(text("PRAGMA foreign_keys=ON"))
-            await conn.execute(text("PRAGMA journal_mode=WAL"))
-            await conn.execute(text("PRAGMA synchronous=NORMAL"))
+            try:
+                await conn.execute(text("PRAGMA foreign_keys=ON"))
+            except Exception:
+                pass
+            # На старых/встроенных сборках может не поддерживаться WAL — не считаем это ошибкой
+            try:
+                await conn.execute(text("PRAGMA journal_mode=WAL"))
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("PRAGMA synchronous=NORMAL"))
+            except Exception:
+                pass
 
-        # 1) общая попытка
+        # 1) Общая попытка
         try:
-            await conn.run_sync(Base.metadata.create_all)
-        except OperationalError as e:
-            # Логируем и продолжаем «добивать» точечно
-            # (иногда на SQLite всплывает existing index -> не должно блокировать остальные таблицы)
-            # print(f"[init_db] create_all warning: {e}")  # можно раскомментировать при отладке
+            # run_sync передаёт sync-connection первым аргументом; checkfirst=True по умолчанию
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
+        except OperationalError:
+            # Например, если всплыл конфликт индексов — добьём по-таблично ниже
             pass
 
-        # 2) гарантированно создадим недостающие таблицы по одной
+        # 2) Добиваем по одной таблице (на случай частичных сбоев)
         for table in Base.metadata.sorted_tables:
             try:
-                await conn.run_sync(table.create, checkfirst=True)
+                await conn.run_sync(lambda sync_conn, t=table: t.create(sync_conn, checkfirst=True))
             except OperationalError:
-                # если индекс/таблица уже есть — пропускаем
+                # Уже существует — игнорируем
                 pass
 
 
 async def drop_db() -> None:
-    """Удаление схемы (мягко, с игнорированием отсутствующих объектов)."""
+    """Удаление всей схемы (мягко, с игнорированием отсутствующих объектов)."""
     async with engine.begin() as conn:
         try:
-            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(lambda sync_conn: Base.metadata.drop_all(sync_conn))
         except OperationalError:
             pass

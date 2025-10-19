@@ -50,14 +50,14 @@ async def cmd_init_db(_args) -> None:
     from process_tracker.db import init_db
     setup_logging, logger = _logging()
     await init_db()
-    logger.info("db_initialized", url=_settings().db_url)
+    logger.info("db_initialized", url=_settings().db_url_resolved)
 
 
 async def cmd_drop_db(_args) -> None:
     from process_tracker.db import drop_db
     setup_logging, logger = _logging()
     await drop_db()
-    logger.info("db_dropped", url=_settings().db_url)
+    logger.info("db_dropped", url=_settings().db_url_resolved)
 
 
 async def cmd_seed_rbac(_args) -> None:
@@ -77,13 +77,14 @@ async def cmd_seed_rbac(_args) -> None:
 def cmd_migrate(args) -> None:
     """alembic upgrade head (bootstrap при первом запуске)."""
     try:
-        from process_tracker.db.migration import (
+        # ВАЖНО: модуль называется migrations.py
+        from process_tracker.db.migrations import (
             ensure_alembic_tree,
             upgrade_head_with_bootstrap,
             upgrade as alembic_upgrade,
         )
     except ModuleNotFoundError:
-        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        print("Модуль миграций отсутствует. Добавь файл src/process_tracker/db/migrations.py")
         raise SystemExit(1)
 
     setup_logging, logger = _logging()
@@ -97,9 +98,9 @@ def cmd_migrate(args) -> None:
 
 def cmd_upgrade(args) -> None:
     try:
-        from process_tracker.db.migration import ensure_alembic_tree, upgrade as alembic_upgrade
+        from process_tracker.db.migrations import ensure_alembic_tree, upgrade as alembic_upgrade
     except ModuleNotFoundError:
-        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        print("Модуль миграций отсутствует. Добавь файл src/process_tracker/db/migrations.py")
         raise SystemExit(1)
     setup_logging, logger = _logging()
     ensure_alembic_tree()
@@ -109,9 +110,9 @@ def cmd_upgrade(args) -> None:
 
 def cmd_downgrade(args) -> None:
     try:
-        from process_tracker.db.migration import ensure_alembic_tree, downgrade as alembic_downgrade
+        from process_tracker.db.migrations import ensure_alembic_tree, downgrade as alembic_downgrade
     except ModuleNotFoundError:
-        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        print("Модуль миграций отсутствует. Добавь файл src/process_tracker/db/migrations.py")
         raise SystemExit(1)
     setup_logging, logger = _logging()
     ensure_alembic_tree()
@@ -121,9 +122,9 @@ def cmd_downgrade(args) -> None:
 
 def cmd_current(_args) -> None:
     try:
-        from process_tracker.db.migration import ensure_alembic_tree, current as alembic_current
+        from process_tracker.db.migrations import ensure_alembic_tree, current as alembic_current
     except ModuleNotFoundError:
-        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        print("Модуль миграций отсутствует. Добавь файл src/process_tracker/db/migrations.py")
         raise SystemExit(1)
     ensure_alembic_tree()
     alembic_current(verbose=True)
@@ -131,9 +132,9 @@ def cmd_current(_args) -> None:
 
 def cmd_revision(args) -> None:
     try:
-        from process_tracker.db.migration import ensure_alembic_tree, revision as alembic_revision
+        from process_tracker.db.migrations import ensure_alembic_tree, revision as alembic_revision
     except ModuleNotFoundError:
-        print("Модуль миграций отсутствует. Пропусти или добавь файл src/process_tracker/db/migration.py")
+        print("Модуль миграций отсутствует. Добавь файл src/process_tracker/db/migrations.py")
         raise SystemExit(1)
     setup_logging, logger = _logging()
     ensure_alembic_tree()
@@ -144,6 +145,10 @@ def cmd_revision(args) -> None:
 
 
 async def cmd_create_user(args) -> None:
+    # ✅ гарантируем схему (чтобы команда не падала на пустой БД)
+    from process_tracker.db import init_db
+    await init_db()
+
     from process_tracker.core.security import hash_password
     from process_tracker.db.session import AsyncSessionLocal
     from process_tracker.db.dal.user_repo import UserRepo
@@ -195,7 +200,6 @@ async def cmd_create_user(args) -> None:
         try:
             await session.refresh(user, attribute_names=["roles"])
         except Exception:
-            # на всякий: у только что созданного пользователя коллекция должна быть пустой
             if "roles" not in user.__dict__:
                 user.roles = []
 
@@ -215,6 +219,7 @@ async def cmd_create_user(args) -> None:
 
         await session.commit()
         logger.info("user_roles_updated", email=email, roles=[r.name for r in user.roles], newly_assigned=assigned)
+
 
 def cmd_run_api(args) -> None:
     import uvicorn
@@ -290,8 +295,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     setup_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # уважаем уровень логгирования из конфига
     logging.getLogger().setLevel(getattr(logging, _settings().log_level.upper(), logging.INFO))
-    logger.info("cli_start", cmd=args.cmd)
+
+    logger.info("cli_start", cmd=args.cmd, db=_settings().db_url_resolved)
     args.func(args)
 
 
