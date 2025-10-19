@@ -5,7 +5,7 @@ from .models import (
     WorkflowDefinition,
     StepKind,
 )
-from .engine import WorkflowEngine, WorkflowStore
+from .engine import WorkflowEngine, WorkflowStore, InMemoryWorkflowStore
 
 __all__ = [
     "Condition",
@@ -15,4 +15,5 @@ __all__ = [
     "StepKind",
     "WorkflowEngine",
     "WorkflowStore",
+    "InMemoryWorkflowStore",
 ]

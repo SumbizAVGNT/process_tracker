@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, constr
 
 
 class StepKind(str, Enum):
@@ -14,10 +14,10 @@ class StepKind(str, Enum):
 
 
 class Condition(BaseModel):
-    """Условие перехода. Поддержим jsonlogic или JMESPath позднее."""
-    expr: str = Field(
+    """Условие перехода. Позже добавим jsonlogic/jmespath/expr-eval."""
+    expr: constr(min_length=1) = Field(
         ...,
-        description="Выражение (jsonlogic или другая DSL). Пока — строка-заглушка.",
+        description="Выражение (jsonlogic/expr). Пока — строка-заглушка.",
     )
     kind: Literal["jsonlogic", "expr"] = "jsonlogic"
 
@@ -33,8 +33,8 @@ class Transition(BaseModel):
 
 
 class Step(BaseModel):
-    id: str
-    name: str
+    id: constr(min_length=1)
+    name: constr(min_length=1)
     kind: StepKind = StepKind.TASK
     assignee_roles: List[str] = Field(default_factory=list)
     permissions: List[str] = Field(default_factory=list)
@@ -42,8 +42,8 @@ class Step(BaseModel):
 
 
 class WorkflowDefinition(BaseModel):
-    id: str
-    name: str
+    id: constr(min_length=1)
+    name: constr(min_length=1)
     version: int = 1
     steps: List[Step]
     transitions: List[Transition]
