@@ -10,6 +10,38 @@ import flet as ft
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):  # pragma: no cover
     ft.icons = ft.Icons  # type: ignore[attr-defined]
 
+# ============================ helpers ============================
+
+def _icon_value(icon: str | ft.Icon | None) -> str | None:
+    """
+    Нормализация иконок:
+      - "ADD" / "LOGIN" → ft.icons.ADD / "add"
+      - "add" (готовая строка)
+      - ft.icons.ADD
+      - ft.Icon(name="add")
+    Возвращает строковое имя иконки или None.
+    """
+    if icon is None:
+        return None
+    if isinstance(icon, ft.Icon):
+        return icon.name
+    if isinstance(icon, str):
+        if hasattr(ft.icons, icon):
+            return getattr(ft.icons, icon)
+        up = icon.upper()
+        if hasattr(ft.icons, up):
+            return getattr(ft.icons, up)
+        return icon
+    return None
+
+
+def _alpha(color: str, a: float) -> str:
+    try:
+        return ft.colors.with_opacity(a, color)
+    except Exception:
+        return color
+
+
 # Если у вас есть собственные поля / формы — они могут отсутствовать на раннем этапе.
 # Импорты сделаны опциональными, чтобы модуль работал даже без них.
 try:
@@ -33,11 +65,12 @@ try:
     from .button import LoadingButton  # type: ignore
 except Exception:  # pragma: no cover
     class LoadingButton(ft.FilledButton):  # минимальный fallback
-        def __init__(self, text: str, icon: Optional[str] = None):
-            super().__init__(text, icon=icon)
+        def __init__(self, text: str, icon: Optional[str | ft.Icon] = None):
+            norm_icon = _icon_value(icon)
+            super().__init__(text, icon=norm_icon)
             self._loading_overlay = ft.ProgressRing(visible=False, width=16, height=16)
             self.content = ft.Row(
-                [ft.Icon(icon) if icon else ft.Container(width=0), ft.Text(text), self._loading_overlay],
+                [ft.Icon(norm_icon) if norm_icon else ft.Container(width=0), ft.Text(text), self._loading_overlay],
                 spacing=8,
                 tight=True,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -63,21 +96,23 @@ def toast(
 ) -> None:
     """Быстрое уведомление внизу страницы."""
     kind = (kind or "info").lower()
+    surf_variant = getattr(ft.colors, "SURFACE_VARIANT", getattr(ft.colors, "BLUE_GREY_700", ft.colors.GREY_700))
+
     if kind == "success":
-        icon = getattr(ft.icons, "CHECK_CIRCLE", None)
-        bgcolor = ft.colors.with_opacity(0.12, ft.colors.GREEN)
+        icon = _icon_value("CHECK_CIRCLE")
+        bgcolor = _alpha(ft.colors.GREEN, 0.12)
     elif kind in ("warn", "warning"):
-        icon = getattr(ft.icons, "WARNING_AMBER", None) or getattr(ft.icons, "WARNING", None)
-        bgcolor = ft.colors.with_opacity(0.12, ft.colors.AMBER)
+        icon = _icon_value("WARNING_AMBER") or _icon_value("WARNING")
+        bgcolor = _alpha(ft.colors.AMBER, 0.12)
     elif kind in ("error", "danger"):
-        icon = getattr(ft.icons, "ERROR_OUTLINE", None) or getattr(ft.icons, "ERROR", None)
-        bgcolor = ft.colors.with_opacity(0.12, ft.colors.RED)
+        icon = _icon_value("ERROR_OUTLINE") or _icon_value("ERROR")
+        bgcolor = _alpha(ft.colors.RED, 0.12)
     else:  # info
-        icon = getattr(ft.icons, "INFO", None)
-        bgcolor = ft.colors.with_opacity(0.12, ft.colors.SURFACE_VARIANT)
+        icon = _icon_value("INFO")
+        bgcolor = _alpha(surf_variant, 0.12)
 
     content = ft.Row(
-        [ft.Icon(icon, size=18), ft.Text(message)],
+        [ft.Icon(icon, size=18) if icon else ft.Container(width=0), ft.Text(message)],
         spacing=10,
         tight=True,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -88,9 +123,9 @@ def toast(
         open=True,
         bgcolor=bgcolor,
         duration=duration_ms,
-        dismiss_direction=ft.DismissDirection.DOWN,
         show_close_icon=True,
-        behavior=ft.SnackBarBehavior.FLOATING,
+        behavior=getattr(ft, "SnackBarBehavior", object).__dict__.get("FLOATING", None),
+        dismiss_direction=getattr(ft, "DismissDirection", object).__dict__.get("DOWN", None),
     )
     page.update()
 
@@ -104,9 +139,9 @@ def async_button(
     # два способа: либо фабрика корутины без события, либо обработчик с событием
     task_factory: Callable[[], Awaitable[Any]] | None = None,
     on_click_async: Callable[[ft.ControlEvent], Awaitable[Any]] | None = None,
-    icon: str | None = None,
+    icon: str | ft.Icon | None = None,
     disabled: bool = False,
-    expand: int | None = None,
+    expand: int | bool | None = None,
     width: float | None = None,
     tooltip: str | None = None,
     **button_kwargs: Any,
@@ -162,8 +197,7 @@ def async_button(
         scheduled = False
         if page is not None and hasattr(page, "run_task"):
             try:
-                # Flet API: ожидает корутинную ФУНКЦИЮ, не объект
-                page.run_task(_run)
+                page.run_task(_run)  # Flet ожидает корутинную функцию
                 scheduled = True
             except Exception:
                 scheduled = False
@@ -177,8 +211,7 @@ def async_button(
                 scheduled = False
 
         if not scheduled:
-            # Крайний случай: синхронный поток без loop и без page.run_task
-            # Выполним корутину блокирующе, чтобы не терять действие.
+            # Крайний случай: без loop и без page.run_task — выполняем блокирующе
             asyncio.run(_run())
 
     btn.on_click = _handler
@@ -214,7 +247,7 @@ async def confirm_dialog(
         content=ft.Text(text),
         actions=[
             ft.TextButton(cancel_text, on_click=lambda _e: _finish(False)),
-            ft.FilledButton(ok_text, icon=ft.icons.CHECK, on_click=lambda _e: _finish(True)),
+            ft.FilledButton(ok_text, icon=_icon_value("CHECK"), on_click=lambda _e: _finish(True)),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -240,13 +273,17 @@ def task_editor(
     Использование в страницах (см. /ui/pages/processes.py):
         editor = task_editor(page, on_save=add_task_handler, label="Новая задача")
     """
-    name = ft.TextField(
-        label=label,
-        hint_text="Введите название…",
-        expand=True,
-        width=width,
-        dense=True,
-    )
+    # Используем ваш TextField, если доступен, иначе Flet
+    if TextField is object:
+        name = ft.TextField(
+            label=label,
+            hint_text="Введите название…",
+            expand=True,
+            width=width,
+            dense=True,
+        )
+    else:
+        name = TextField(label, hint_text="Введите название…", expand=True, width=width, dense=True)  # type: ignore
 
     # Enter в поле — тоже сохранить
     def _on_submit(_e: ft.ControlEvent) -> None:
@@ -262,7 +299,6 @@ def task_editor(
             except Exception:
                 pass
 
-        # безопасное планирование
         if hasattr(page, "run_task"):
             page.run_task(_go)
         else:
@@ -277,7 +313,7 @@ def task_editor(
         page,
         button_text,
         task_factory=lambda: on_save((name.value or "").strip()),
-        icon=ft.icons.ADD,
+        icon=_icon_value("ADD"),
         tooltip="Сохранить",
     )
 

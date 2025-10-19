@@ -1,30 +1,39 @@
 from __future__ import annotations
+import asyncio
 import flet as ft
 from sqlalchemy import select, func
+
 from ...db.session import AsyncSessionLocal
 from ...db.models import Task, Process
-from ..components.shell import page_scaffold
-from ..components.theme import kpi
 
-async def _load_counts():
+try:
+    from ..components.shell import page_scaffold
+except ModuleNotFoundError:
+    from ..shell import page_scaffold  # type: ignore
+
+from ..components.stat_card import metric_tile
+from ..components.forms import toast
+
+
+# ── data ─────────────────────────────────────────────────────────────────────
+async def _load_counts() -> tuple[int, int, int]:
     open_cnt = 0
     done_cnt = 0
     proc_cnt = 0
     async with AsyncSessionLocal() as s:
-        # Всего процессов
         try:
             proc_cnt = (await s.scalar(select(func.count()).select_from(Process))) or 0
         except Exception:
             proc_cnt = 0
-        # Всего задач
         try:
             total = (await s.scalar(select(func.count()).select_from(Task))) or 0
         except Exception:
             total = 0
-        # Если есть поле status — посчитаем done/open, иначе всё в "открытые"
         try:
             if hasattr(Task, "status"):
-                done_cnt = (await s.scalar(select(func.count()).select_from(Task).where(Task.status == "done"))) or 0
+                done_cnt = (await s.scalar(
+                    select(func.count()).select_from(Task).where(Task.status == "done")
+                )) or 0
                 open_cnt = max(total - done_cnt, 0)
             else:
                 open_cnt = total
@@ -33,46 +42,105 @@ async def _load_counts():
             done_cnt = 0
     return open_cnt, done_cnt, proc_cnt
 
+
+# ── view ─────────────────────────────────────────────────────────────────────
 def view(page: ft.Page) -> ft.View:
-    v_open, v_done, v_proc = ft.Text("0", size=22, weight="w800"), ft.Text("0", size=22, weight="w800"), ft.Text("0", size=22, weight="w800")
+    # крупные значения
+    v_open = ft.Text("0", size=28, weight="w800")
+    v_done = ft.Text("0", size=28, weight="w800")
+    v_proc = ft.Text("0", size=28, weight="w800")
 
     async def refresh():
-        o, d, p = await _load_counts()
-        v_open.value, v_done.value, v_proc.value = str(o), str(d), str(p)
-        try: page.update()
-        except Exception: pass
+        try:
+            o, d, p = await _load_counts()
+            v_open.value, v_done.value, v_proc.value = str(o), str(d), str(p)
+            try: page.update()
+            except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            toast(page, f"Не удалось обновить: {e}", kind="error")
 
-    page.run_task(refresh)
+    # первая загрузка — безопасно планируем
+    try:
+        page.run_task(refresh)
+    except Exception:
+        try:
+            asyncio.get_running_loop().create_task(refresh())
+        except RuntimeError:
+            asyncio.run(refresh())
 
-    grid = ft.Row(
+    # hero-шапка с маленькими икон-шорткатами
+    hero = ft.Row(
         [
-            kpi("Открытые задачи", v_open, icon=ft.icons.LOCAL_FIRE_DEPARTMENT if hasattr(ft.icons, "LOCAL_FIRE_DEPARTMENT") else ft.icons.WHATSHOT),
-            kpi("Завершено задач", v_done, icon=ft.icons.CHECK_CIRCLE_OUTLINE if hasattr(ft.icons, "CHECK_CIRCLE_OUTLINE") else ft.icons.CHECK_CIRCLE),
-            kpi("Всего процессов", v_proc, icon=ft.icons.WORKSPACES_OUTLINED if hasattr(ft.icons, "WORKSPACES_OUTLINED") else ft.icons.WORK),
+            ft.Column(
+                [
+                    ft.Text("Дашборд", size=24, weight="w800"),
+                    ft.Text("Ключевые показатели и процессы проекта", color=ft.colors.ON_SURFACE_VARIANT),
+                ],
+                spacing=6, tight=True,
+            ),
+            ft.Container(expand=True),
+            ft.Row(
+                [
+                    ft.IconButton(icon=ft.icons.ADD_TASK, tooltip="Новая задача", on_click=lambda _e: page.go("/tasks/create")),
+                    ft.IconButton(icon=ft.icons.TIMELINE, tooltip="Процессы", on_click=lambda _e: page.go("/processes")),
+                    ft.IconButton(icon=ft.icons.SETTINGS, tooltip="Настройки", on_click=lambda _e: page.go("/settings")),
+                ],
+                spacing=6,
+            ),
         ],
-        spacing=16,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    # KPI → ResponsiveRow (современно и адаптивно)
+    grid = ft.ResponsiveRow(
+        controls=[
+            ft.Container(
+                content=metric_tile(
+                    "Открытые задачи", v_open, icon="WHATSHOT", tone="warning",
+                    trend=[3, 4, 6, 5, 7, 6, 8, 7],
+                    tooltip="Показать задачи / создать новую",
+                    on_click=lambda _e: page.go("/tasks/create"),
+                ),
+                col={"xs": 12, "sm": 6, "md": 4},
+            ),
+            ft.Container(
+                content=metric_tile(
+                    "Завершено задач", v_done, icon="CHECK_CIRCLE_OUTLINE", tone="success",
+                    trend=[1, 2, 2, 3, 4, 5, 6, 7],
+                    tooltip="История завершения",
+                    on_click=lambda _e: page.go("/tasks/create"),
+                ),
+                col={"xs": 12, "sm": 6, "md": 4},
+            ),
+            ft.Container(
+                content=metric_tile(
+                    "Всего процессов", v_proc, icon="WORKSPACES_OUTLINED", tone="info",
+                    trend=[2, 2, 3, 3, 3, 4, 4, 5],
+                    tooltip="Открыть список процессов",
+                    on_click=lambda _e: page.go("/processes"),
+                ),
+                col={"xs": 12, "sm": 6, "md": 4},
+            ),
+        ],
+        columns=12,
         run_spacing=16,
-        wrap=True,
-        vertical_alignment=ft.CrossAxisAlignment.START,
+        spacing=16,
     )
 
-    actions = ft.Row(
-        [
-            ft.FilledButton("Создать задачу", icon=ft.icons.ADD, on_click=lambda _: page.go("/tasks/create")),
-            ft.OutlinedButton("К процессам", icon=ft.icons.LIST, on_click=lambda _: page.go("/processes")),
-            ft.OutlinedButton("Настройки", icon=ft.icons.SETTINGS, on_click=lambda _: page.go("/settings")),
-        ],
-        spacing=10,
-    )
+    # плавающая FAB (круглая, без текстов)
+    try:
+        page.floating_action_button = ft.FloatingActionButton(
+            icon=ft.icons.ADD,
+            tooltip="Создать задачу",
+            mini=True,
+            bgcolor=ft.colors.BLUE_ACCENT_400,
+            on_click=lambda _e: page.go("/tasks/create"),
+        )
+    except Exception:
+        pass
 
     body = ft.Column(
-        [
-            ft.Text("Обзор", size=18, weight="w800"),
-            ft.Container(height=10),
-            grid,
-            ft.Container(height=12),
-            actions,
-        ],
+        [hero, ft.Container(height=8), grid],
         spacing=0,
         tight=True,
     )

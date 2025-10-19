@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 from ..services.workflow_service import WorkflowService
 from ..core.workflow.models import WorkflowDefinition, Step
@@ -32,13 +33,6 @@ async def get_workflow(wf_id: str, version: Optional[int] = None, svc: WorkflowS
 async def validate_workflow(body: WorkflowDefinition, svc: WorkflowService = Depends(_svc_dep)):
     await svc.engine.validate(body)
     return {"ok": True}
-
-
-class NextStepsRequest(WorkflowDefinition.model_construct().__class__):  # just to get BaseModel
-    pass  # заглушка для mypy
-
-
-from pydantic import BaseModel, Field
 
 
 class NextStepsIn(BaseModel):

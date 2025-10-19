@@ -1,31 +1,43 @@
 from __future__ import annotations
-
 """
 Асинхронные утилиты:
-- fire_and_forget() / run_coro_threadsafe()
-- a_timeout(), a_retry()
-- Debouncer, Throttler
-- gather_limited()
-- to_thread(), run_sync()
+- get_loop()
+- fire_and_forget()          — запустить корутину в фоне (если нет цикла — отдельный поток)
+- run_coro_threadsafe()      — выполнить корутину из синхронного кода (без активного цикла)
+- a_timeout()                — таймаут на любую корутину
+- a_retry()                  — ретраи с бэкоффом и джиттером
+- Debouncer                  — «отложенный» вызов (сбрасывается при новых инпутах)
+- Throttler                  — вызовы не чаще min_interval
+- gather_limited()           — параллелизм с ограничением
+- to_thread() / run_sync()   — запуск sync-функции в thread-пуле (есть async- и sync-варианты)
 """
 
+from typing import Any, Awaitable, Callable, Iterable, Sequence, TypeVar, Optional
 import asyncio
 import contextlib
+import random
 import time
-from typing import Any, Awaitable, Callable, Iterable, Sequence, TypeVar
+import threading
 
 try:
     # предпочитаем наш structlog-логер
     from ..core.logging import logger  # type: ignore
 except Exception:  # fallback на stdlib
     import logging
-
     logger = logging.getLogger("asyncio-tools")
 
 T = TypeVar("T")
 
 
+# --------------------------------------------------------------------------- #
+# Loop helpers
+# --------------------------------------------------------------------------- #
+
 def get_loop() -> asyncio.AbstractEventLoop:
+    """
+    Возвращает текущий «запущенный» цикл, иначе создаёт НОВЫЙ и делает его текущим.
+    ВНИМАНИЕ: создание нового цикла не запускает его автоматически.
+    """
     try:
         return asyncio.get_running_loop()
     except RuntimeError:
@@ -34,18 +46,44 @@ def get_loop() -> asyncio.AbstractEventLoop:
         return loop
 
 
-def fire_and_forget(coro: Awaitable[Any], *, name: str | None = None) -> asyncio.Task[Any]:
+# --------------------------------------------------------------------------- #
+# Fire & forget / thread-safe run
+# --------------------------------------------------------------------------- #
+
+def fire_and_forget(coro: Awaitable[Any], *, name: str | None = None) -> Optional[asyncio.Task[Any]]:
     """
-    Запускает корутину без ожидания (фон). Исключения логируются.
+    Запускает корутину «в фоне».
+    - Если есть активный цикл в текущем потоке → create_task().
+    - Если цикла нет → запустим отдельный DAEMON-поток с собственным loop и asyncio.run().
+      В этом режиме возвращается None (нет asyncio.Task в текущем loop).
+
+    Возврат:
+      asyncio.Task | None
     """
-    loop = get_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Нет активного цикла — отдадим выполнение отдельному потоку
+        def _runner():
+            try:
+                asyncio.run(coro)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("bg_thread_task_failed", error=repr(exc))
+        th = threading.Thread(target=_runner, name=name or "fire-and-forget", daemon=True)
+        th.start()
+        return None
+
     task = loop.create_task(coro, name=name)
 
     def _done(t: asyncio.Task[Any]) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             exc = t.exception()
             if exc:
-                logger.warning("bg_task_failed", name=getattr(t, "get_name", lambda: None)(), error=repr(exc))
+                try:
+                    name_ = t.get_name() if hasattr(t, "get_name") else name
+                except Exception:
+                    name_ = name
+                logger.warning("bg_task_failed", name=name_, error=repr(exc))
 
     task.add_done_callback(_done)
     return task
@@ -53,17 +91,24 @@ def fire_and_forget(coro: Awaitable[Any], *, name: str | None = None) -> asyncio
 
 def run_coro_threadsafe(coro: Awaitable[T]) -> T:
     """
-    Выполнить корутину из синхронного кода (например, обработчик кнопки в Flet).
-    Если цикл уже запущен в текущем потоке — блокирующе исполняет через run_until_complete.
+    Выполнить корутину из СИНХРОННОГО контекста (где нет активного loop) блокирующе.
+    Если цикл уже запущен в текущем потоке — кидаем исключение (используйте `await`).
+
+    Пример:
+        result = run_coro_threadsafe(do_work_async())
     """
     try:
-        loop = asyncio.get_running_loop()
-        # если уже в async-контексте — это ошибка, корутина должна быть awaited
-        raise RuntimeError("run_coro_threadsafe() called from running loop; use `await`")
+        asyncio.get_running_loop()
+        # Мы уже в async-контексте → это ошибка использования API.
+        raise RuntimeError("run_coro_threadsafe() called from a running loop; use `await` instead")
     except RuntimeError:
-        # нет активного цикла — запускаем новый
+        # Нет активного цикла в текущем потоке → можно безопасно выполнить
         return asyncio.run(coro)
 
+
+# --------------------------------------------------------------------------- #
+# Timeout / Retry
+# --------------------------------------------------------------------------- #
 
 async def a_timeout(coro: Awaitable[T], timeout: float) -> T:
     return await asyncio.wait_for(coro, timeout=timeout)
@@ -75,10 +120,20 @@ async def a_retry(
     retries: int = 3,
     delay: float = 0.5,
     backoff: float = 2.0,
+    jitter: float = 0.1,
     retry_on: tuple[type[BaseException], ...] = (Exception,),
+    on_retry: Optional[Callable[[int, BaseException], None]] = None,
 ) -> T:
     """
-    Повтор выполнения корутины с экспоненциальной задержкой.
+    Повтор выполнения корутины с экспоненциальной задержкой и джиттером.
+
+    Параметры:
+      retries  — количество повторов (без первой попытки)
+      delay    — стартовая задержка, сек
+      backoff  — множитель бэкоффа (>=1.0)
+      jitter   — добавочный ±%, например 0.1 → ±10%
+      retry_on — кортеж исключений для повторов
+      on_retry — callback(attempt, exc) перед сном
     """
     attempt = 0
     cur_delay = delay
@@ -89,15 +144,25 @@ async def a_retry(
             attempt += 1
             if attempt > retries:
                 raise
-            logger.warning("retry", attempt=attempt, error=repr(e))
-            await asyncio.sleep(cur_delay)
-            cur_delay *= backoff
+            # джиттер
+            j = 1.0 + random.uniform(-jitter, jitter) if jitter > 0 else 1.0
+            sleep_for = max(0.0, cur_delay * j)
+            logger.warning("retry", attempt=attempt, delay=sleep_for, error=repr(e))
+            if on_retry:
+                with contextlib.suppress(Exception):
+                    on_retry(attempt, e)
+            await asyncio.sleep(sleep_for)
+            cur_delay *= max(1.0, backoff)
 
+
+# --------------------------------------------------------------------------- #
+# Debounce / Throttle
+# --------------------------------------------------------------------------- #
 
 class Debouncer:
     """
-    Отложенный вызов корутины: пока приходят новые вызовы — старые отменяются.
-    Полезно для поиска/валидации "на лету".
+    Отложенный вызов корутины: пока приходят новые вызовы — предыдущая задача отменяется.
+    Полезно для поиска/валидации «на лету».
     """
 
     def __init__(self, delay: float = 0.3) -> None:
@@ -141,9 +206,14 @@ class Throttler:
         return await func(*args, **kwargs)
 
 
+# --------------------------------------------------------------------------- #
+# Concurrency helpers
+# --------------------------------------------------------------------------- #
+
 async def gather_limited(limit: int, coros: Iterable[Awaitable[T]]) -> Sequence[T]:
     """
     Параллельное выполнение, но не более `limit` задач одновременно.
+    Сохраняет порядок результатов как в исходной коллекции.
     """
     sem = asyncio.Semaphore(max(1, limit))
 
@@ -155,12 +225,29 @@ async def gather_limited(limit: int, coros: Iterable[Awaitable[T]]) -> Sequence[
     return await asyncio.gather(*tasks)
 
 
+# --------------------------------------------------------------------------- #
+# Sync ↔ Async bridges
+# --------------------------------------------------------------------------- #
+
 async def to_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Асинхронно выполнить синхронную функцию в пуле потоков."""
     return await asyncio.to_thread(func, *args, **kwargs)
+
+
+async def run_sync_async(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """
+    Вызов синхронной функции из async-кода.
+    Эквивалентен: `await to_thread(func, *args, **kwargs)`.
+    """
+    return await to_thread(func, *args, **kwargs)
 
 
 def run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """
-    Запустить синхронную функцию в отдельном потоке из async-кода.
+    Вызов синхронной функции из СИНХРОННОГО кода, но в отдельном потоке.
+    Полезно, когда хочется из обычной функции «не блокировать» GUI/цикл событий.
+
+    Пример:
+        result = run_sync(io_bound_func, path)
     """
-    return get_loop().run_until_complete(to_thread(func, *args, **kwargs))
+    return asyncio.run(to_thread(func, *args, **kwargs))

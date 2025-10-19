@@ -1,9 +1,11 @@
 from __future__ import annotations
 import flet as ft
 from sqlalchemy import text
+
 from ...db.session import AsyncSessionLocal
 from ..components.shell import page_scaffold
 from ..components.forms import async_button, toast
+from ..components.theme import card  # card(content)
 
 def view(page: ft.Page) -> ft.View:
     db_url = ft.TextField(label="Строка подключения (readonly)", value="(см. .env)", read_only=True, expand=True)
@@ -17,22 +19,26 @@ def view(page: ft.Page) -> ft.View:
         except Exception as e:
             toast(page, f"Ошибка БД: {e}", kind="error")
 
-    body = ft.Column(
-        [
-            ft.Text("Настройки", size=18, weight="w800"),
-            ft.Container(height=10),
-            ft.Row([db_url], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Container(height=6),
-            ft.Row(
-                [
-                    async_button(page, "Проверить БД", task_factory=test_db, icon=ft.icons.STORAGE if hasattr(ft.icons, "STORAGE") else ft.icons.SETTINGS),
-                    ft.OutlinedButton("Открыть процессы", icon=ft.icons.LIST, on_click=lambda _: page.go("/processes")),
-                    ft.OutlinedButton("На дашборд", icon=ft.icons.DASHBOARD, on_click=lambda _: page.go("/dashboard")),
-                ],
-                spacing=10,
-            ),
-        ],
-        spacing=10,
-        tight=True,
+    form_card = card(
+        ft.Column(
+            [
+                ft.Text("Настройки", size=20, weight="w800"),
+                ft.Container(height=10),
+                db_url,
+                ft.Container(height=6),
+                ft.Row(
+                    [
+                        async_button(page, "Проверить БД", task_factory=test_db, icon="STORAGE"),
+                        ft.OutlinedButton("Открыть процессы", icon=ft.icons.LIST, on_click=lambda _: page.go("/processes")),
+                        ft.OutlinedButton("На дашборд", icon=ft.icons.DASHBOARD, on_click=lambda _: page.go("/dashboard")),
+                    ],
+                    spacing=10,
+                ),
+            ],
+            spacing=10,
+            tight=True,
+        )
     )
-    return page_scaffold(page, title="Настройки", route="/settings", body=body)
+
+    form = ft.Container(content=form_card, padding=18)
+    return page_scaffold(page, title="Настройки", route="/settings", body=form)

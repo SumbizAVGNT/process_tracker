@@ -1,12 +1,10 @@
 # src/process_tracker/routes/ws.py
-
 from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ..core.events import events
 
 router = APIRouter()
-
 
 @router.websocket("/ws/tasks")
 async def ws_tasks(ws: WebSocket):
