@@ -1,13 +1,4 @@
 # src/process_tracker/db/seed.py
-"""
-Начальное заполнение ролей и прав (RBAC).
-Роли: admin, manager, user, viewer
-Права:
-- admin.*                           (опасное)
-- process.read, process.write
-- task.create, task.update, task.delete
-- settings.read, settings.write
-"""
 from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,12 +35,10 @@ async def seed_rbac(session: AsyncSession) -> None:
     rrepo = RoleRepo(session)
     prepo = PermissionRepo(session)
 
-    # Ensure perms
     perms = {}
     for name, desc, dangerous in DEFAULT_PERMS:
         perms[name] = await prepo.ensure(name, desc, dangerous)
 
-    # Ensure roles
     roles = {}
     for name, desc in DEFAULT_ROLES.items():
         role = await rrepo.get_by_name(name)
@@ -57,7 +46,6 @@ async def seed_rbac(session: AsyncSession) -> None:
             role = await rrepo.create(name, desc)
         roles[name] = role
 
-    # Grant
     for role_name, perm_names in ROLE_MATRIX.items():
         role = roles[role_name]
         for perm_name in perm_names:

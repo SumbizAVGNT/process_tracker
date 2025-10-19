@@ -1,60 +1,52 @@
-# src/process_tracker/db/__init__.py
 from __future__ import annotations
 
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from .session import engine
-from .models import Base  # Важно: импортирует все модели, регистрируя их в Base.metadata
+from .session import engine, AsyncSessionLocal  # важно!
+from .models import Base
+from .migrations import upgrade_head_with_bootstrap
+from .seed import seed_rbac
 
-__all__ = ["init_db", "drop_db"]
+__all__ = ["init_db", "drop_db", "bootstrap_db"]
 
 
 async def init_db() -> None:
-    """
-    Идемпотентная инициализация схемы:
-      - включает SQLite PRAGMA
-      - пробует Base.metadata.create_all()
-      - гарантированно создаёт каждую таблицу отдельно с checkfirst=True
-    """
     async with engine.begin() as conn:
-        # SQLite: включаем внешние ключи и мягкий тюнинг
         if engine.url.get_backend_name().startswith("sqlite"):
-            try:
-                await conn.execute(text("PRAGMA foreign_keys=ON"))
-            except Exception:
-                pass
-            # На старых/встроенных сборках может не поддерживаться WAL — не считаем это ошибкой
-            try:
-                await conn.execute(text("PRAGMA journal_mode=WAL"))
-            except Exception:
-                pass
-            try:
-                await conn.execute(text("PRAGMA synchronous=NORMAL"))
-            except Exception:
-                pass
-
-        # 1) Общая попытка
+            for pragma in ("foreign_keys=ON", "journal_mode=WAL", "synchronous=NORMAL"):
+                try:
+                    await conn.execute(text(f"PRAGMA {pragma}"))
+                except Exception:
+                    pass
         try:
-            # run_sync передаёт sync-connection первым аргументом; checkfirst=True по умолчанию
-            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
+            await conn.run_sync(lambda sc: Base.metadata.create_all(sc))
         except OperationalError:
-            # Например, если всплыл конфликт индексов — добьём по-таблично ниже
             pass
-
-        # 2) Добиваем по одной таблице (на случай частичных сбоев)
         for table in Base.metadata.sorted_tables:
             try:
-                await conn.run_sync(lambda sync_conn, t=table: t.create(sync_conn, checkfirst=True))
+                await conn.run_sync(lambda sc, t=table: t.create(sc, checkfirst=True))
             except OperationalError:
-                # Уже существует — игнорируем
                 pass
 
 
 async def drop_db() -> None:
-    """Удаление всей схемы (мягко, с игнорированием отсутствующих объектов)."""
     async with engine.begin() as conn:
         try:
-            await conn.run_sync(lambda sync_conn: Base.metadata.drop_all(sync_conn))
+            await conn.run_sync(lambda sc: Base.metadata.drop_all(sc))
         except OperationalError:
             pass
+
+
+async def bootstrap_db() -> None:
+    """
+    Полный цикл:
+      - Alembic bootstrap + upgrade head (автогенерируем «init», если нужно)
+      - сид RBAC
+    """
+    # alembic — синхронный; гоняем в отдельном потоке
+    import asyncio
+    await asyncio.to_thread(upgrade_head_with_bootstrap)
+
+    async with AsyncSessionLocal() as s:
+        await seed_rbac(s)
