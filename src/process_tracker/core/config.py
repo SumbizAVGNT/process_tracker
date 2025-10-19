@@ -1,4 +1,3 @@
-# src/process_tracker/core/config.py
 from __future__ import annotations
 
 import base64
@@ -72,7 +71,7 @@ class Settings(BaseSettings):
         url = (self.db_url or "").strip()
         prefix = "sqlite+aiosqlite:///./"
         if url.startswith(prefix):
-            rel = url[len(prefix) :]
+            rel = url[len(prefix):]
             abs_path = (self.project_root / rel).resolve()
             return f"sqlite+aiosqlite:///{abs_path.as_posix()}"
         return url

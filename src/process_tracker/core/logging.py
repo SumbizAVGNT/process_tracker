@@ -56,7 +56,7 @@ def setup_logging() -> None:
     setup_logging._configured = True
 
 
-def get_logger(name: Optional[str] = None) -> structlog.stdlib.BoundLogger:
+def get_logger(name: Optional[str] = None) -> "structlog.stdlib.BoundLogger":
     return structlog.get_logger(name) if name else structlog.get_logger()
 
 
