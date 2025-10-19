@@ -1,47 +1,107 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+from sqlalchemy import select, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..services.forms_service import FormsService
-from ..core.forms.schemas import FormSchema
+from ..db.session import AsyncSessionLocal
+from ..db.models import FormDef  # <-- напрямую из models, не из models_meta
 
-router = APIRouter(tags=["forms"])
-
-
-def _svc_dep() -> FormsService:
-    # пока используем in-memory сервис; дальше можно переключить на DI/BД
-    return FormsService()
+router = APIRouter(prefix="/forms", tags=["forms"])
 
 
-@router.get("/forms", response_model=List[FormSchema])
-async def list_forms(svc: FormsService = Depends(_svc_dep)):
-    return await svc.list_forms()
+# --- DI session --------------------------------------------------------------
+async def get_session() -> AsyncSession:
+    async with AsyncSessionLocal() as s:
+        yield s
 
 
-@router.get("/forms/{form_id}", response_model=FormSchema)
-async def get_form(form_id: str, svc: FormsService = Depends(_svc_dep)):
-    try:
-        return await svc.get_form(form_id)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="form not found")
+# --- Schemas ----------------------------------------------------------------
+class FormDefIn(BaseModel):
+    """
+    Входная модель. Поле 'schema' конфликтует с зарезервированным именем в pydantic,
+    поэтому используем form_schema + алиасы для JSON.
+    """
+    model_config = ConfigDict(
+        populate_by_name=True,
+        # Разрешаем имя 'schema' через алиасы
+    )
+    slug: str = Field(..., description="Уникальный код формы")
+    title: str = Field(..., description="Название формы")
+    form_schema: dict[str, Any] = Field(
+        ...,
+        alias="schema",
+        description="JSON-схема формы",
+    )
 
 
-class ValidateIn(BaseModel):
-    data: Dict[str, Any] = Field(default_factory=dict)
+class FormDefOut(BaseModel):
+    slug: str
+    title: str
+    schema: dict[str, Any]
+
+    @classmethod
+    def from_orm_row(cls, row: FormDef) -> "FormDefOut":
+        return cls(slug=row.slug, title=row.title, schema=row.schema or {})
 
 
-class ValidateOut(BaseModel):
-    ok: bool
-    errors: Dict[str, List[str]] = Field(default_factory=dict)
+# --- Routes -----------------------------------------------------------------
+@router.get("/defs", response_model=List[FormDefOut])
+async def list_defs(session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).order_by(FormDef.id.desc()))
+    items = list(res.scalars().all())
+    return [FormDefOut.from_orm_row(x) for x in items]
 
 
-@router.post("/forms/{form_id}/validate", response_model=ValidateOut)
-async def validate_form(form_id: str, body: ValidateIn, svc: FormsService = Depends(_svc_dep)):
-    try:
-        ok, errors = await svc.validate(form_id, body.data or {})
-        return ValidateOut(ok=ok, errors=errors)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="form not found")
+@router.get("/defs/{slug}", response_model=FormDefOut)
+async def get_def(slug: str, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).where(FormDef.slug == slug))
+    item = res.scalars().first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
+    return FormDefOut.from_orm_row(item)
+
+
+@router.post("/defs", response_model=FormDefOut, status_code=status.HTTP_201_CREATED)
+async def create_def(payload: FormDefIn, session: AsyncSession = Depends(get_session)):
+    # upsert по slug
+    res = await session.execute(select(FormDef).where(FormDef.slug == payload.slug))
+    item = res.scalars().first()
+    if item:
+        # обновим
+        item.title = payload.title
+        item.schema = payload.form_schema
+        await session.flush()
+        return FormDefOut.from_orm_row(item)
+
+    item = FormDef(slug=payload.slug, title=payload.title, schema=payload.form_schema)
+    session.add(item)
+    await session.flush()
+    return FormDefOut.from_orm_row(item)
+
+
+@router.put("/defs/{slug}", response_model=FormDefOut)
+async def update_def(slug: str, payload: FormDefIn, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).where(FormDef.slug == slug))
+    item = res.scalars().first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
+    item.slug = payload.slug  # разрешим переименовать
+    item.title = payload.title
+    item.schema = payload.form_schema
+    await session.flush()
+    return FormDefOut.from_orm_row(item)
+
+
+@router.delete("/defs/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_def(slug: str, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).where(FormDef.slug == slug))
+    item = res.scalars().first()
+    if not item:
+        # идемпотентно: 204 даже если уже нет
+        return
+    await session.delete(item)
+    await session.flush()

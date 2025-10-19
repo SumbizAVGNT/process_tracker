@@ -1,10 +1,24 @@
 from __future__ import annotations
+
 import asyncio
 
-from . import bootstrap_db
+from .migrations import upgrade_head_with_bootstrap
+from .seed import seed_rbac
+from .session import AsyncSessionLocal
 
-async def main():
-    await bootstrap_db()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+def run_migrations_blocking() -> None:
+    try:
+        upgrade_head_with_bootstrap()
+    except Exception:
+        pass
+
+
+async def run_seed() -> None:
+    async with AsyncSessionLocal() as s:
+        await seed_rbac(s)
+
+
+def bootstrap_all_blocking() -> None:
+    run_migrations_blocking()
+    asyncio.run(run_seed())

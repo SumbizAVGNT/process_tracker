@@ -2,7 +2,7 @@ from __future__ import annotations
 import flet as ft
 from ..state import state
 
-# ── helpers/compat ───────────────────────────────────────────────────────────
+# ── helpers / compat ─────────────────────────────────────────────────────────
 def _safe_color(name: str, fallback: str) -> str:
     return getattr(ft.colors, name, getattr(ft.colors, fallback, fallback))
 
@@ -12,7 +12,7 @@ def _alpha(color: str, a: float) -> str:
     except Exception:
         return color
 
-# Пытаемся взять helpers из theme (ПРАВИЛЬНЫЙ относительный импорт из того же пакета)
+# Градиент — берём из theme, если есть
 try:
     from .theme import _alpha as theme_alpha, brand_gradient as theme_brand_gradient  # type: ignore
     def brand_gradient() -> ft.LinearGradient: return theme_brand_gradient()
@@ -22,29 +22,33 @@ except Exception:
         return ft.LinearGradient(
             begin=ft.alignment.top_left,
             end=ft.alignment.bottom_right,
-            colors=[_alpha(_safe_color("BLUE_ACCENT_400", "BLUE"), 0.25),
-                    _alpha(_safe_color("PURPLE_ACCENT_200", "PURPLE"), 0.18)],
+            colors=[
+                _alpha(_safe_color("BLUE_ACCENT_400", "BLUE"), 0.25),
+                _alpha(_safe_color("PURPLE_ACCENT_200", "PURPLE"), 0.18),
+            ],
         )
 
-# Навбар — корректный относительный импорт из текущего пакета; с фоллбеком
+# Навбар с мягким фоллбеком
 try:
     from .navbar import navbar  # type: ignore
 except Exception:
-    def navbar(page: ft.Page, active_route: str) -> ft.Container:  # минимальный фоллбек
+    def navbar(page: ft.Page, active_route: str) -> ft.Container:
         items = [
             ("/dashboard", "Дашборд", getattr(ft.icons, "DASHBOARD", None) or getattr(ft.icons, "HOME", None)),
             ("/processes", "Процессы", getattr(ft.icons, "TIMELINE", None) or getattr(ft.icons, "LIST", None)),
+            ("/tasks/create", "Создать задачу", getattr(ft.icons, "ADD_TASK", None) or getattr(ft.icons, "ADD", None)),
             ("/settings", "Настройки", getattr(ft.icons, "SETTINGS", None)),
         ]
         row = ft.Row(
-            [ft.FilledButton(t, icon=i, on_click=lambda _e, r=r: page.go(r)) for r, t, i in items],
-            spacing=10, scroll=ft.ScrollMode.AUTO,
+            [ft.OutlinedButton(t, icon=i, on_click=lambda _e, r=r: page.go(r)) for r, t, i in items],
+            spacing=10,
+            wrap=False,
         )
         return ft.Container(row, padding=ft.padding.symmetric(8, 8))
 
 MAX_W = 1200
 
-
+# ── Topbar ───────────────────────────────────────────────────────────────────
 def _topbar(page: ft.Page) -> ft.Container:
     user = state.user_email or "Гость"
 
@@ -61,13 +65,11 @@ def _topbar(page: ft.Page) -> ft.Container:
         spacing=10,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
-
     right = ft.Row(
         [ft.Icon(getattr(ft.icons, "ACCOUNT_CIRCLE", None), size=18), ft.Text(user, weight="w600")],
         spacing=6,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
-
     return ft.Container(
         content=ft.Row([brand, ft.Container(expand=True), right],
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -77,13 +79,21 @@ def _topbar(page: ft.Page) -> ft.Container:
         border_radius=16,
     )
 
-
-def page_scaffold(page: ft.Page, *, title: str, route: str, body: ft.Control) -> ft.View:
+# ── Scaffold ─────────────────────────────────────────────────────────────────
+def page_scaffold(
+    page: ft.Page,
+    *,
+    title: str,
+    route: str,
+    body: ft.Control,
+    show_topbar: bool = True,
+    show_nav: bool = True,
+    center: bool = False,
+) -> ft.View:
     """
-    Единый каркас страницы:
-      - верхняя панель + навигация
-      - фон-градиент (из theme.brand_gradient, если доступен)
-      - центрирование контента по ширине с MAX_W
+    Универсальный каркас страницы.
+    - show_topbar / show_nav — вкл/выкл верхние панели
+    - center=True — центрирует body по вертикали и горизонтали (для логина и т.п.)
     """
     # Базовые настройки страницы
     page.title = f"Процесс Трекер — {title}"
@@ -91,47 +101,52 @@ def page_scaffold(page: ft.Page, *, title: str, route: str, body: ft.Control) ->
     page.bgcolor = ft.colors.BLACK
     page.padding = 0
     page.scroll = ft.ScrollMode.AUTO
-
-    # Шрифт (необязателен)
     try:
         page.fonts = {"Inter": "https://rsms.me/inter/font-files/InterVariable.woff2"}
         page.theme = ft.Theme(font_family="Inter")
     except Exception:
         pass
 
-    # Центровщик контента
-    content_column = ft.Column(
-        [_topbar(page), ft.Container(height=10), navbar(page, route), ft.Container(height=10), body],
-        spacing=0,
-        tight=True,
-    )
+    # Составляем "chrome"
+    chrome_children: list[ft.Control] = []
+    if show_topbar:
+        chrome_children += [_topbar(page), ft.Container(height=10)]
+    if show_nav:
+        chrome_children += [navbar(page, route), ft.Container(height=10)]
+
+    # Центрация контента: кладём body внутрь "кармана", чтобы ignore-ить его expand
+    if center:
+        centered_slot = ft.Container(content=body, alignment=ft.alignment.center)
+        content_area: ft.Control = ft.Column(
+            [centered_slot],
+            expand=True,
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+    else:
+        content_area = body
+
+    chrome_children.append(content_area)
 
     chrome = ft.Container(
-        content=content_column,
-        padding=ft.padding.symmetric(18, 12),
-        alignment=ft.alignment.top_center,
-        expand=True,
+        content=ft.Column(
+            chrome_children,
+            spacing=0,
+            tight=True,
+            horizontal_alignment=(ft.CrossAxisAlignment.CENTER if center else ft.CrossAxisAlignment.START),
+            alignment=(ft.MainAxisAlignment.CENTER if center else ft.MainAxisAlignment.START),
+        ),
         width=MAX_W,
+        padding=ft.padding.symmetric(18, 12),
     )
 
-    # Фоновый слой
-    background = ft.Container(
+    # Корневой слой с градиентом и выравниванием
+    root = ft.Container(
         expand=True,
         gradient=brand_gradient(),
         bgcolor=_alpha(_safe_color("ON_SURFACE", "WHITE"), 0.02),
-    )
-
-    # Обёртка, чтобы chrome был по центру поверх background
-    wrapper = ft.Container(
+        alignment=(ft.alignment.center if center else ft.alignment.top_center),
         content=chrome,
-        alignment=ft.alignment.top_center,
-        expand=True,
     )
 
-    # Возвращаем View с центрированием
-    return ft.View(
-        route=route,
-        vertical_alignment=ft.MainAxisAlignment.START,
-        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        controls=[ft.Stack([background, wrapper], expand=True)],
-    )
+    return ft.View(route=route, controls=[root])

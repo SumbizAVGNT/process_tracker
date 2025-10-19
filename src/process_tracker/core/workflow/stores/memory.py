@@ -1,87 +1,96 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Tuple
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from typing import AsyncGenerator, Dict, List, Optional, Iterable
 
-from ..models import WorkflowDefinition, Step, StepKind, Transition, Condition
-from ..engine import WorkflowStore, WorkflowEngine
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-class MemoryWorkflowStore(WorkflowStore):
+@dataclass
+class WorkflowDefinition:
     """
-    Простое in-memory хранилище.
-    Версионирование по целому `version`; по умолчанию отдаём max(version).
+    Минимальная модель определения workflow:
+    - key: уникальный ключ (например, "it.incident")
+    - title: человекочитаемое имя
+    - nodes/edges: произвольные структуры вашего редактора графа
+    - version: инкрементальная версия
+    - created_at/updated_at: метки времени
     """
-    def __init__(self, defs: Iterable[WorkflowDefinition] | None = None) -> None:
-        self._defs: Dict[str, Dict[int, WorkflowDefinition]] = {}
-        if defs:
-            for d in defs:
-                self.add(d)
-
-    def add(self, wf: WorkflowDefinition) -> None:
-        bucket = self._defs.setdefault(wf.id, {})
-        bucket[wf.version] = wf
-
-    async def get_definition(self, wf_id: str, version: Optional[int] = None) -> WorkflowDefinition:
-        versions = self._defs.get(wf_id) or {}
-        if not versions:
-            raise KeyError(f"workflow '{wf_id}' not found")
-        if version is None:
-            version = max(versions.keys())
-        try:
-            return versions[version]
-        except KeyError as e:
-            raise KeyError(f"workflow '{wf_id}' version {version} not found") from e
-
-    async def list_definitions(self) -> Iterable[WorkflowDefinition]:
-        for _, bucket in self._defs.items():
-            # отдаём только максимальные версии
-            if bucket:
-                yield bucket[max(bucket.keys())]
+    key: str
+    title: str
+    nodes: List[dict] = field(default_factory=list)
+    edges: List[dict] = field(default_factory=list)
+    version: int = 1
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
 
 
-def _sample_wf() -> WorkflowDefinition:
-    """Мини-схема: start -> triage(gateway) -> do_task -> end"""
-    steps: List[Step] = [
-        Step(id="start", name="Start", kind=StepKind.START),
-        Step(id="triage", name="Triage", kind=StepKind.GATEWAY),
-        Step(id="do_task", name="Do Task", kind=StepKind.TASK, assignee_roles=["user"], permissions=["task.update"]),
-        Step(id="end", name="Done", kind=StepKind.END),
-    ]
-    transitions: List[Transition] = [
-        Transition(name="to_triage", source="start", target="triage"),
-        # Пока условие-заглушка True; позже можно заменить на jsonlogic
-        Transition(name="approve", source="triage", target="do_task", condition=Condition(expr="true")),
-        Transition(name="finish", source="do_task", target="end"),
-    ]
-    return WorkflowDefinition(
-        id="sample.process",
-        name="Sample Process",
-        version=1,
-        steps=steps,
-        transitions=transitions,
-        meta={"category": "demo"},
-    )
+class MemoryWorkflowStore:
+    """
+    Простой in-memory стор для определений workflow.
+    Совместим как с синхронной, так и с async-логикой роутов/сервисов.
+    """
+    def __init__(self) -> None:
+        self._defs: Dict[str, WorkflowDefinition] = {}
+
+    # -------- CRUD по определениям --------
+
+    async def list_definitions(self) -> AsyncGenerator[WorkflowDefinition, None]:
+        """
+        Асинхронный генератор — чтобы было удобно делать `async for` без лишних обёрток.
+        """
+        for d in self._defs.values():
+            yield d
+
+    async def get_definition(self, key: str) -> Optional[WorkflowDefinition]:
+        return self._defs.get(key)
+
+    async def upsert_definition(
+        self,
+        key: str,
+        *,
+        title: Optional[str] = None,
+        nodes: Optional[Iterable[dict]] = None,
+        edges: Optional[Iterable[dict]] = None,
+        version: Optional[int] = None,
+    ) -> WorkflowDefinition:
+        existing = self._defs.get(key)
+        if existing is None:
+            obj = WorkflowDefinition(
+                key=key,
+                title=title or key,
+                nodes=list(nodes or []),
+                edges=list(edges or []),
+                version=version or 1,
+            )
+            self._defs[key] = obj
+            return obj
+
+        # update
+        if title is not None:
+            existing.title = title
+        if nodes is not None:
+            existing.nodes = list(nodes)
+        if edges is not None:
+            existing.edges = list(edges)
+        if version is not None:
+            existing.version = int(version)
+        existing.updated_at = utcnow()
+        return existing
+
+    async def delete_definition(self, key: str) -> bool:
+        return self._defs.pop(key, None) is not None
+
+    # -------- Утилиты (опционально) --------
+
+    async def to_dict(self, key: str) -> Optional[dict]:
+        obj = await self.get_definition(key)
+        return asdict(obj) if obj else None
 
 
-def create_default_store(validated: bool = True) -> Tuple[MemoryWorkflowStore, WorkflowEngine]:
-    store = MemoryWorkflowStore([_sample_wf()])
-    engine = WorkflowEngine(store)
-    if validated:
-        # провалидируем все схемы
-        async def _validate_all():
-            async for_def in _aiter(store.list_definitions())
-            for wf in for_def:
-                await engine.validate(wf)
-        # небольшой трюк без внешнего event loop
-        import asyncio as _asyncio
-        try:
-            loop = _asyncio.get_running_loop()
-            loop.create_task(_validate_all())
-        except RuntimeError:
-            _asyncio.run(_validate_all())
-    return store, engine
-
-
-async def _aiter(iterable) -> list:
-    # вспом. адаптер: сделать список из async-несовместимого Iterable
-    return list(iterable)
+# Фабрика стора по умолчанию — именно её импортирует сервис
+def create_default_store() -> MemoryWorkflowStore:
+    return MemoryWorkflowStore()

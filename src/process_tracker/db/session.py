@@ -1,4 +1,3 @@
-# src/process_tracker/db/session.py
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +8,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from ..core.config import settings
-from .models import Base  # noqa: F401
+from .models import Base  # noqa: F401  — чтобы metadata была загружена
 
 ENGINE_URL = settings.db_url_resolved
 _url = make_url(ENGINE_URL)
@@ -21,6 +20,7 @@ engine_kwargs: dict = dict(
     pool_pre_ping=True,
 )
 
+# Для SQLite оставим дефолтный NullPool/Singleton. Для других — можно настроить.
 if not _is_sqlite:
     if hasattr(settings, "db_pool_size"):
         engine_kwargs["pool_size"] = getattr(settings, "db_pool_size")
@@ -30,6 +30,7 @@ if not _is_sqlite:
         engine_kwargs["pool_recycle"] = getattr(settings, "db_pool_recycle")
 
 engine = create_async_engine(ENGINE_URL, **engine_kwargs)
+
 
 @event.listens_for(engine.sync_engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, _):  # pragma: no cover
@@ -41,13 +42,14 @@ def _set_sqlite_pragma(dbapi_connection, _):  # pragma: no cover
         except Exception:
             pass
 
+
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
 
-DB_CONCURRENCY_SEM = asyncio.Semaphore(max(1, settings.db_max_concurrency))
+DB_CONCURRENCY_SEM = asyncio.Semaphore(max(1, getattr(settings, "db_max_concurrency", 10)))
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

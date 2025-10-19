@@ -1,62 +1,67 @@
 from __future__ import annotations
-
-from typing import List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
-
-from ..db.session import get_session
+from typing import List
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..db.dal import TaskRepo
 
-router = APIRouter()
+from ..db.models import Task  # ваш текущий класс
+from ._deps import get_db, CurrentUser, require_perm
+
+router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+
 
 class TaskIn(BaseModel):
-    title: str = Field(..., min_length=1, max_length=200)
+    process_id: int | None = None
+    type_key: str | None = None
+    title: str
+    priority: str | None = None
+    assignee_email: str | None = None
+    due_at: str | None = None
+
 
 class TaskOut(BaseModel):
     id: int
     title: str
-    done: bool
+    status: str | None = None
+    priority: str | None = None
+    assignee_email: str | None = None
+    process_id: int | None = None
 
-@router.get("/tasks", response_model=List[TaskOut])
-async def list_tasks(
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    session: AsyncSession = Depends(get_session),
-):
-    repo = TaskRepo(session)
-    items = await repo.list()
-    items = items[offset : offset + limit]
-    return [TaskOut(id=i.id, title=i.title, done=i.done) for i in items]
 
-@router.post("/tasks", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
-async def create_task(body: TaskIn, session: AsyncSession = Depends(get_session)):
-    repo = TaskRepo(session)
-    obj = await repo.create(body.title)
-    await session.commit()
-    return TaskOut(id=obj.id, title=obj.title, done=obj.done)
+@router.get("", response_model=List[TaskOut])
+async def list_tasks(db: AsyncSession = Depends(get_db), user=Depends(CurrentUser)):
+    require_perm(user, "task.read")
+    rows = (await db.execute(select(Task))).scalars().all()
+    return [
+        TaskOut(
+            id=r.id,
+            title=getattr(r, "title", f"Task #{r.id}"),
+            status=getattr(r, "status", None),
+            priority=getattr(r, "priority", None),
+            assignee_email=getattr(r, "assignee_email", None),
+            process_id=getattr(r, "process_id", None),
+        )
+        for r in rows
+    ]
 
-class TaskDoneIn(BaseModel):
-    done: bool = True
 
-@router.patch("/tasks/{task_id}/done", response_model=TaskOut)
-async def set_task_done(task_id: int, body: TaskDoneIn, session: AsyncSession = Depends(get_session)):
-    repo = TaskRepo(session)
-    updated_id = await repo.set_done(task_id, body.done)
-    if not updated_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    await session.commit()
-    # простое повторное чтение из списка (можно сделать get_by_id)
-    items = await repo.list()
-    obj = next((x for x in items if x.id == task_id), None)
-    return TaskOut(id=obj.id, title=obj.title, done=obj.done)
-
-@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(task_id: int, session: AsyncSession = Depends(get_session)):
-    repo = TaskRepo(session)
-    deleted_id = await repo.remove(task_id)
-    if not deleted_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
-    await session.commit()
-    return
+@router.post("", response_model=TaskOut)
+async def create_task(body: TaskIn, db: AsyncSession = Depends(get_db), user=Depends(CurrentUser)):
+    require_perm(user, "task.create")
+    obj = Task(
+        title=body.title,
+        status=getattr(Task, "status", None) and "open" or None,
+        priority=body.priority,
+        assignee_email=body.assignee_email,
+        process_id=body.process_id,
+    )
+    db.add(obj); await db.commit(); await db.refresh(obj)
+    return TaskOut(
+        id=obj.id,
+        title=getattr(obj, "title", f"Task #{obj.id}"),
+        status=getattr(obj, "status", None),
+        priority=getattr(obj, "priority", None),
+        assignee_email=getattr(obj, "assignee_email", None),
+        process_id=getattr(obj, "process_id", None),
+    )

@@ -1,62 +1,36 @@
 from __future__ import annotations
-
-from typing import Any, Dict, List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..services.workflow_service import WorkflowService
-from ..core.workflow.models import WorkflowDefinition, Step
+from ..db.models_meta import WorkflowDef
+from ._deps import get_db, CurrentUser, require_perm
 
-router = APIRouter(tags=["workflows"])
-
-
-def _svc_dep() -> WorkflowService:
-    # Пока — in-memory store по умолчанию; позже переведём на DI/DB
-    return WorkflowService()
+router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
 
 
-@router.get("/workflows", response_model=List[WorkflowDefinition])
-async def list_workflows(svc: WorkflowService = Depends(_svc_dep)):
-    return await svc.list_definitions()
+class WorkflowDefIn(BaseModel):
+    key: str = Field(..., max_length=64)
+    version: int = 1
+    definition: dict
 
 
-@router.get("/workflows/{wf_id}", response_model=WorkflowDefinition)
-async def get_workflow(wf_id: str, version: Optional[int] = None, svc: WorkflowService = Depends(_svc_dep)):
-    try:
-        return await svc.get_definition(wf_id, version)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow not found")
+class WorkflowDefOut(WorkflowDefIn):
+    id: int
 
 
-@router.post("/workflows/validate")
-async def validate_workflow(body: WorkflowDefinition, svc: WorkflowService = Depends(_svc_dep)):
-    await svc.engine.validate(body)
-    return {"ok": True}
+@router.get("", response_model=List[WorkflowDefOut])
+async def list_workflows(db: AsyncSession = Depends(get_db), user=Depends(CurrentUser)):
+    require_perm(user, "workflow.read")
+    rows = (await db.execute(select(WorkflowDef))).scalars().all()
+    return [WorkflowDefOut(id=r.id, key=r.key, version=r.version, definition=r.definition) for r in rows]
 
 
-class NextStepsIn(BaseModel):
-    wf_id: str = Field(..., description="ID процесса")
-    current_step_id: str = Field(..., description="Текущий шаг")
-    context: Dict[str, Any] = Field(default_factory=dict)
-    roles: List[str] = Field(default_factory=list)
-    perms: List[str] = Field(default_factory=list)
-
-
-class NextStepsOut(BaseModel):
-    steps: List[Step]
-
-
-@router.post("/workflows/next-steps", response_model=NextStepsOut)
-async def calc_next_steps(body: NextStepsIn, svc: WorkflowService = Depends(_svc_dep)):
-    try:
-        steps = await svc.next_steps(
-            wf_id=body.wf_id,
-            current_step_id=body.current_step_id,
-            context=body.context,
-            user_roles=body.roles,
-            user_perms=body.perms,
-        )
-        return NextStepsOut(steps=steps)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow not found")
+@router.post("", response_model=WorkflowDefOut)
+async def create_workflow(body: WorkflowDefIn, db: AsyncSession = Depends(get_db), user=Depends(CurrentUser)):
+    require_perm(user, "workflow.create")
+    obj = WorkflowDef(key=body.key, version=body.version, definition=body.definition)
+    db.add(obj); await db.commit(); await db.refresh(obj)
+    return WorkflowDefOut(id=obj.id, key=obj.key, version=obj.version, definition=obj.definition)

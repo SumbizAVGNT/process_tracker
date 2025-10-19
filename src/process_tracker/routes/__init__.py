@@ -7,6 +7,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from ..core.config import settings
 from .rate_limit import rate_limit
+
+# опциональные guard'ы (если security.require доступен)
 try:
     from ..security.auth import require
     _guard_read_tasks = [Depends(require("tasks.read"))]
@@ -17,31 +19,47 @@ except Exception:
 
 API_PREFIX = "/api/v1"
 
+
 def build_api() -> FastAPI:
     app = FastAPI(title="Process Tracker API", version="0.1.0")
 
+    # CORS
     origins: Sequence[str] = settings.cors_origins or []
     if origins:
         app.add_middleware(
-            CORSMiddleware, allow_origins=list(origins),
-            allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+            CORSMiddleware,
+            allow_origins=list(origins),
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
         )
+
+    # gzip
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+    # system
     @app.get("/", tags=["system"])
-    async def root(): return {"ok": True, "name": "process-tracker", "version": app.version}
+    async def root():
+        return {"ok": True, "name": "process-tracker", "version": app.version}
 
     @app.get("/health", tags=["system"])
-    async def health(): return {"ok": True}
+    async def health():
+        return {"ok": True}
 
+    # helper для подключения роутеров (c rate-limit и опциональными guard'ами)
     def add(router, *tags, guards=None):
         try:
-            app.include_router(router, prefix=API_PREFIX, tags=list(tags),
-                               dependencies=[Depends(rate_limit)] + (guards or []))
+            app.include_router(
+                router,
+                prefix=API_PREFIX,
+                tags=list(tags),
+                dependencies=[Depends(rate_limit)] + (guards or []),
+            )
         except Exception:
+            # модуль/роутер может отсутствовать — пропускаем тихо
             pass
 
-    # core routers
+    # --- core routers ---
     from .tasks import router as tasks_router
     add(tasks_router, "tasks", guards=_guard_read_tasks)
 
@@ -53,6 +71,19 @@ def build_api() -> FastAPI:
 
     from .workflows import router as workflows_router
     add(workflows_router, "workflows")
+
+    # ✅ новые: типы процессов и задач (мета-модель)
+    try:
+        from .process_types import router as process_types_router
+        add(process_types_router, "process-types")
+    except Exception:
+        pass
+
+    try:
+        from .task_types import router as task_types_router
+        add(task_types_router, "task-types")
+    except Exception:
+        pass
 
     from .templates import router as templates_router
     add(templates_router, "templates", guards=_guard_manage_templates)
@@ -79,7 +110,7 @@ def build_api() -> FastAPI:
     from .audit import router as audit_router
     add(audit_router, "audit")
 
-    # SSE events (без rate-limit — можно оставить, но лучше без)
+    # SSE события — без rate-limit (оставляю отдельно)
     try:
         from .events import router as events_router
         app.include_router(events_router, prefix=API_PREFIX, tags=["events"])

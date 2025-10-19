@@ -1,3 +1,4 @@
+# src/process_tracker/ui/router.py
 from __future__ import annotations
 """
 UI router: безопасное разрешение маршрута → ft.View.
@@ -34,6 +35,7 @@ _PROTECTED_PREFIXES: tuple[str, ...] = (
     "/tasks",
     "/forms",
     "/workflows",
+    "/blueprint",   # ⬅️ новый раздел с вкладками
 )
 
 
@@ -63,7 +65,11 @@ def _error_404(page: ft.Page, route: str) -> ft.View:
                         ft.Row(
                             [
                                 ft.FilledButton("На главную", icon=ft.icons.HOME, on_click=lambda _: page.go("/")),
-                                ft.OutlinedButton("Назад", icon=ft.icons.ARROW_BACK, on_click=lambda _: page.go("/dashboard" if state.is_authenticated else "/")),
+                                ft.OutlinedButton(
+                                    "Назад",
+                                    icon=ft.icons.ARROW_BACK,
+                                    on_click=lambda _: page.go("/dashboard" if state.is_authenticated else "/"),
+                                ),
                             ],
                             spacing=10,
                         ),
@@ -90,7 +96,11 @@ def _error_500(page: ft.Page, message: str) -> ft.View:
                         ft.Text(message, color=ft.colors.ON_SURFACE_VARIANT),
                         ft.Row(
                             [
-                                ft.FilledButton("Обновить", icon=ft.icons.REFRESH, on_click=lambda _: page.go(_norm_route(page.route))),
+                                ft.FilledButton(
+                                    "Обновить",
+                                    icon=ft.icons.REFRESH,
+                                    on_click=lambda _: page.go(_norm_route(page.route)),
+                                ),
                                 ft.OutlinedButton("На главную", icon=ft.icons.HOME, on_click=lambda _: page.go("/")),
                             ],
                             spacing=10,
@@ -145,6 +155,11 @@ def _resolve_view(page: ft.Page, route: str) -> ft.View:
     if path == "/workflows":
         from .pages import workflows as _wf
         return _safe_view(_wf.view, page)
+
+    # Блюпринт (ядро/конструкторы/интеграции/ RBAC и пр. — страница сама разберёт вкладку по page.route)
+    if path == "/blueprint" or path.startswith("/blueprint/"):
+        from .pages import blueprint as _bp
+        return _safe_view(_bp.view, page)
 
     # Настройки
     if path == "/settings":
