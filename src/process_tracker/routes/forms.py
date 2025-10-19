@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Optional, List
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select, update, delete
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import AsyncSessionLocal
-from ..db.models import FormDef  # <-- напрямую из models, не из models_meta
+from ..db.models import FormDef
 
 router = APIRouter(prefix="/forms", tags=["forms"])
 
@@ -21,31 +21,21 @@ async def get_session() -> AsyncSession:
 
 # --- Schemas ----------------------------------------------------------------
 class FormDefIn(BaseModel):
-    """
-    Входная модель. Поле 'schema' конфликтует с зарезервированным именем в pydantic,
-    поэтому используем form_schema + алиасы для JSON.
-    """
-    model_config = ConfigDict(
-        populate_by_name=True,
-        # Разрешаем имя 'schema' через алиасы
-    )
-    slug: str = Field(..., description="Уникальный код формы")
+    key: str = Field(..., description="Уникальный код формы")
     title: str = Field(..., description="Название формы")
-    form_schema: dict[str, Any] = Field(
-        ...,
-        alias="schema",
-        description="JSON-схема формы",
-    )
+    schema: dict[str, Any] = Field(..., description="JSON-схема формы")
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class FormDefOut(BaseModel):
-    slug: str
+    key: str
     title: str
     schema: dict[str, Any]
+    meta: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_orm_row(cls, row: FormDef) -> "FormDefOut":
-        return cls(slug=row.slug, title=row.title, schema=row.schema or {})
+        return cls(key=row.key, title=row.title, schema=row.schema or {}, meta=row.meta or {})
 
 
 # --- Routes -----------------------------------------------------------------
@@ -56,9 +46,9 @@ async def list_defs(session: AsyncSession = Depends(get_session)):
     return [FormDefOut.from_orm_row(x) for x in items]
 
 
-@router.get("/defs/{slug}", response_model=FormDefOut)
-async def get_def(slug: str, session: AsyncSession = Depends(get_session)):
-    res = await session.execute(select(FormDef).where(FormDef.slug == slug))
+@router.get("/defs/{key}", response_model=FormDefOut)
+async def get_def(key: str, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).where(FormDef.key == key))
     item = res.scalars().first()
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
@@ -67,41 +57,44 @@ async def get_def(slug: str, session: AsyncSession = Depends(get_session)):
 
 @router.post("/defs", response_model=FormDefOut, status_code=status.HTTP_201_CREATED)
 async def create_def(payload: FormDefIn, session: AsyncSession = Depends(get_session)):
-    # upsert по slug
-    res = await session.execute(select(FormDef).where(FormDef.slug == payload.slug))
+    # upsert по key
+    res = await session.execute(select(FormDef).where(FormDef.key == payload.key))
     item = res.scalars().first()
     if item:
-        # обновим
         item.title = payload.title
-        item.schema = payload.form_schema
-        await session.flush()
+        item.schema = payload.schema
+        item.meta = payload.meta or {}
+        await session.commit()
+        await session.refresh(item)
         return FormDefOut.from_orm_row(item)
 
-    item = FormDef(slug=payload.slug, title=payload.title, schema=payload.form_schema)
+    item = FormDef(key=payload.key, title=payload.title, schema=payload.schema, meta=payload.meta or {})
     session.add(item)
-    await session.flush()
+    await session.commit()
+    await session.refresh(item)
     return FormDefOut.from_orm_row(item)
 
 
-@router.put("/defs/{slug}", response_model=FormDefOut)
-async def update_def(slug: str, payload: FormDefIn, session: AsyncSession = Depends(get_session)):
-    res = await session.execute(select(FormDef).where(FormDef.slug == slug))
+@router.put("/defs/{key}", response_model=FormDefOut)
+async def update_def(key: str, payload: FormDefIn, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).where(FormDef.key == key))
     item = res.scalars().first()
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Form not found")
-    item.slug = payload.slug  # разрешим переименовать
+    item.key = payload.key  # разрешим переименовать
     item.title = payload.title
-    item.schema = payload.form_schema
-    await session.flush()
+    item.schema = payload.schema
+    item.meta = payload.meta or {}
+    await session.commit()
+    await session.refresh(item)
     return FormDefOut.from_orm_row(item)
 
 
-@router.delete("/defs/{slug}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_def(slug: str, session: AsyncSession = Depends(get_session)):
-    res = await session.execute(select(FormDef).where(FormDef.slug == slug))
+@router.delete("/defs/{key}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_def(key: str, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(FormDef).where(FormDef.key == key))
     item = res.scalars().first()
     if not item:
-        # идемпотентно: 204 даже если уже нет
         return
     await session.delete(item)
-    await session.flush()
+    await session.commit()

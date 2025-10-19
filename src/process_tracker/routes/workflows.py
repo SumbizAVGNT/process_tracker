@@ -1,36 +1,74 @@
 from __future__ import annotations
-from typing import List
-from fastapi import APIRouter, Depends
+
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models_meta import WorkflowDef
-from ._deps import get_db, CurrentUser, require_perm
+from ..core.blueprints import (
+    BlueprintDefinition,
+    MemoryBlueprintStore,
+    create_default_store,
+    compile_to_workflow,
+)
+from ..core.workflow import WorkflowEngine, InMemoryWorkflowStore
 
-router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
+router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+# in-memory store (можно заменить на БД-сервис)
+_store: MemoryBlueprintStore = create_default_store()
 
 
-class WorkflowDefIn(BaseModel):
-    key: str = Field(..., max_length=64)
+class BlueprintIn(BaseModel):
+    key: str = Field(..., max_length=128)
+    title: str
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
     version: int = 1
-    definition: dict
 
 
-class WorkflowDefOut(WorkflowDefIn):
-    id: int
+class BlueprintOut(BlueprintIn):
+    pass
 
 
-@router.get("", response_model=List[WorkflowDefOut])
-async def list_workflows(db: AsyncSession = Depends(get_db), user=Depends(CurrentUser)):
-    require_perm(user, "workflow.read")
-    rows = (await db.execute(select(WorkflowDef))).scalars().all()
-    return [WorkflowDefOut(id=r.id, key=r.key, version=r.version, definition=r.definition) for r in rows]
+@router.get("/blueprints", response_model=List[BlueprintOut])
+async def list_blueprints():
+    items = await _store.list_as_list()
+    return [BlueprintOut(**bp.to_dict()) for bp in items]
 
 
-@router.post("", response_model=WorkflowDefOut)
-async def create_workflow(body: WorkflowDefIn, db: AsyncSession = Depends(get_db), user=Depends(CurrentUser)):
-    require_perm(user, "workflow.create")
-    obj = WorkflowDef(key=body.key, version=body.version, definition=body.definition)
-    db.add(obj); await db.commit(); await db.refresh(obj)
-    return WorkflowDefOut(id=obj.id, key=obj.key, version=obj.version, definition=obj.definition)
+@router.get("/blueprints/{key}", response_model=BlueprintOut)
+async def get_blueprint(key: str):
+    bp = await _store.get_definition(key)
+    if not bp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="blueprint not found")
+    return BlueprintOut(**bp.to_dict())
+
+
+@router.post("/blueprints", response_model=BlueprintOut, status_code=status.HTTP_201_CREATED)
+async def upsert_blueprint(body: BlueprintIn):
+    bp = await _store.upsert_definition(
+        key=body.key,
+        title=body.title,
+        nodes=body.nodes,
+        edges=body.edges,
+        version=body.version,
+    )
+    return BlueprintOut(**bp.to_dict())
+
+
+class CompileOut(BaseModel):
+    workflow: Dict[str, Any]
+
+
+@router.post("/blueprints/{key}/compile", response_model=CompileOut)
+async def compile_blueprint(key: str):
+    bp = await _store.get_definition(key)
+    if not bp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="blueprint not found")
+
+    wf = compile_to_workflow(bp)
+    engine = WorkflowEngine(InMemoryWorkflowStore([wf]))
+    await engine.validate(wf)
+    # pydantic-модель engine.wf сериализуем через model_dump()
+    return CompileOut(workflow=wf.model_dump())

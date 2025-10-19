@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["audit"])
 
-# in-memory журнал
 _LOG: list[dict] = []
 
 class AuditIn(BaseModel):

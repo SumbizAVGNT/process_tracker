@@ -22,11 +22,9 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 async def upload_files(files: List[UploadFile] = File(...)):
     saved = []
     for uf in files:
-        # простое имя файла (без директорий)
         name = os.path.basename(uf.filename or "file.bin")
         safe = name.replace("/", "_").replace("\\", "_")
         dst = MEDIA_DIR / safe
-        # если существует — добавим индекс
         i = 1
         stem, ext = os.path.splitext(safe)
         while dst.exists():

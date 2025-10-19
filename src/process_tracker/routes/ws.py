@@ -1,4 +1,3 @@
-# src/process_tracker/routes/ws.py
 from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -13,7 +12,6 @@ async def ws_tasks(ws: WebSocket):
     try:
         while True:
             ev = await q.get()
-            # Отправляем только события задач
             if isinstance(ev, dict) and str(ev.get("type", "")).startswith("task_"):
                 await ws.send_json(ev)
     except WebSocketDisconnect:

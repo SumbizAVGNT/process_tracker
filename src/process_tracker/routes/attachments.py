@@ -54,7 +54,7 @@ async def upload_attachment(
         "entity_id": entity_id,
         "filename": dst.name,
         "size": len(content),
-        "url": f"/api/v1/files/{dst.name}",  # реиспользуем files.py
+        "url": f"/api/v1/files/{dst.name}",
         "created_at": datetime.utcnow(),
     }
     _STORE[aid] = rec
@@ -74,5 +74,4 @@ async def delete_attachment(att_id: int):
     rec = _STORE.pop(att_id, None)
     if not rec:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="attachment not found")
-    # файл оставляем (можно удалить при желании)
     return

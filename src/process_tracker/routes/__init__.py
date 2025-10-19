@@ -8,9 +8,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 from ..core.config import settings
 from .rate_limit import rate_limit
 
-# опциональные guard'ы (если security.require доступен)
+# опциональные guard'ы (если есть реальная security)
 try:
-    from ..security.auth import require
+    from ..security.auth import require  # noqa: F401
     _guard_read_tasks = [Depends(require("tasks.read"))]
     _guard_manage_templates = [Depends(require("templates.manage"))]
 except Exception:
@@ -46,7 +46,7 @@ def build_api() -> FastAPI:
     async def health():
         return {"ok": True}
 
-    # helper для подключения роутеров (c rate-limit и опциональными guard'ами)
+    # helper для подключения роутеров (с rate-limit и опциональными guard'ами)
     def add(router, *tags, guards=None):
         try:
             app.include_router(
@@ -69,19 +69,20 @@ def build_api() -> FastAPI:
     from .forms import router as forms_router
     add(forms_router, "forms")
 
+    # 🌿 workflows (in-memory blueprints + compile/validate)
     from .workflows import router as workflows_router
     add(workflows_router, "workflows")
 
-    # ✅ новые: типы процессов и задач (мета-модель)
+    # типы задач (есть в БД). типы процессов пока опционально — пропустим, если модели нет
     try:
-        from .process_types import router as process_types_router
-        add(process_types_router, "process-types")
+        from .task_types import router as task_types_router
+        add(task_types_router, "task-types")
     except Exception:
         pass
 
     try:
-        from .task_types import router as task_types_router
-        add(task_types_router, "task-types")
+        from .process_types import router as process_types_router
+        add(process_types_router, "process-types")
     except Exception:
         pass
 
@@ -97,20 +98,17 @@ def build_api() -> FastAPI:
     from .files import router as files_router
     add(files_router, "files")
 
-    # new
-    from .auth import router as auth_router
-    add(auth_router, "auth")
-
-    from .users import router as users_router
-    add(users_router, "users")
-
     from .attachments import router as attachments_router
     add(attachments_router, "attachments")
 
     from .audit import router as audit_router
     add(audit_router, "audit")
 
-    # SSE события — без rate-limit (оставляю отдельно)
+    # auth — без общего префикса (он прилепится include_router-ом)
+    from .auth import router as auth_router
+    add(auth_router, "auth")
+
+    # SSE события — без rate-limit (оставляем отдельно)
     try:
         from .events import router as events_router
         app.include_router(events_router, prefix=API_PREFIX, tags=["events"])

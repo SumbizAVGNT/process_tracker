@@ -1,4 +1,3 @@
-# src/process_tracker/routes/auth.py
 from __future__ import annotations
 
 from typing import List, Optional, Dict, Any
@@ -7,7 +6,7 @@ from pydantic import BaseModel, Field
 import secrets
 import time
 
-# ВАЖНО: префикс ТОЛЬКО "/auth" — общий "/api/v1" добавит сборщик API
+# префикс только "/auth" — общий "/api/v1" добавит сборщик API
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 ACCESS_TTL = 60 * 60 * 12         # 12h

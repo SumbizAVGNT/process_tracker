@@ -1,4 +1,3 @@
-# src/process_tracker/routes/rate_limit.py
 from __future__ import annotations
 
 import time
@@ -37,11 +36,10 @@ def rate_limit(
 
     cutoff = now - window_seconds
     while q and q[0] < cutoff:
-        q.pop() if False else q.popleft()  # (сохраняем O(1) pop слева)
+        q.popleft()
 
     remaining_before = max(0, max_requests - len(q))
     if len(q) >= max_requests:
-        # тайм до сброса окна
         reset_in = max(0.0, window_seconds - (now - q[0]))
         response.headers["X-RateLimit-Limit"] = str(max_requests)
         response.headers["X-RateLimit-Remaining"] = "0"
@@ -52,8 +50,6 @@ def rate_limit(
         )
 
     q.append(now)
-
-    # Заголовки после успешного пропуска
     reset_in = window_seconds if not q else max(0.0, window_seconds - (now - q[0]))
     response.headers["X-RateLimit-Limit"] = str(max_requests)
     response.headers["X-RateLimit-Remaining"] = str(max(0, remaining_before - 1))
