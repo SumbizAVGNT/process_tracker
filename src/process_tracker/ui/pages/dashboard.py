@@ -1,163 +1,80 @@
 from __future__ import annotations
-
 import flet as ft
 from sqlalchemy import select, func
-
 from ...db.session import AsyncSessionLocal
-from ...db.models import Task, Process  # используем модели напрямую
-from ..components.navbar import navbar
+from ...db.models import Task, Process
+from ..components.shell import page_scaffold
+from ..components.theme import kpi
 
-
-CARD_PAD = 14
-CARD_RADIUS = 16
-
-
-async def _safe_count(session, model, *, where_clause=None) -> int:
-    q = select(func.count()).select_from(model)
-    if where_clause is not None:
-        q = q.where(where_clause)
-    return int(await session.scalar(q) or 0)
-
-
-async def _count_open_tasks(session) -> int:
-    cols = Task.__table__.c  # ColumnCollection
-    if "status" in cols.keys():
-        return await _safe_count(session, Task, where_clause=(cols.status != "done"))
-    if "completed_at" in cols.keys():
-        return await _safe_count(session, Task, where_clause=(cols.completed_at.is_(None)))
-    # фолбэк — считаем все как «открытые»
-    return await _safe_count(session, Task)
-
-
-async def _count_done_tasks(session) -> int:
-    cols = Task.__table__.c
-    if "status" in cols.keys():
-        return await _safe_count(session, Task, where_clause=(cols.status == "done"))
-    if "completed_at" in cols.keys():
-        return await _safe_count(session, Task, where_clause=(cols.completed_at.is_not(None)))
-    # фолбэк — 0 «выполненных», если схемы нет
-    return 0
-
-
-def _stat_card(title: str, value: int, icon: str) -> ft.Container:
-    return ft.Container(
-        content=ft.Row(
-            [
-                ft.Container(
-                    content=ft.Icon(icon, size=22),
-                    width=40,
-                    height=40,
-                    border_radius=12,
-                    bgcolor=ft.colors.with_opacity(0.08, ft.colors.PRIMARY),
-                    alignment=ft.alignment.center,
-                ),
-                ft.Column(
-                    [
-                        ft.Text(title, size=12, color=ft.colors.ON_SURFACE_VARIANT),
-                        ft.Text(str(value), size=22, weight="w700"),
-                    ],
-                    spacing=4,
-                    tight=True,
-                ),
-            ],
-            spacing=12,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
-        padding=CARD_PAD,
-        border_radius=CARD_RADIUS,
-        border=ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.ON_SURFACE)),
-        bgcolor=ft.colors.with_opacity(0.06, ft.colors.SURFACE),
-    )
-
+async def _load_counts():
+    open_cnt = 0
+    done_cnt = 0
+    proc_cnt = 0
+    async with AsyncSessionLocal() as s:
+        # Всего процессов
+        try:
+            proc_cnt = (await s.scalar(select(func.count()).select_from(Process))) or 0
+        except Exception:
+            proc_cnt = 0
+        # Всего задач
+        try:
+            total = (await s.scalar(select(func.count()).select_from(Task))) or 0
+        except Exception:
+            total = 0
+        # Если есть поле status — посчитаем done/open, иначе всё в "открытые"
+        try:
+            if hasattr(Task, "status"):
+                done_cnt = (await s.scalar(select(func.count()).select_from(Task).where(Task.status == "done"))) or 0
+                open_cnt = max(total - done_cnt, 0)
+            else:
+                open_cnt = total
+        except Exception:
+            open_cnt = total
+            done_cnt = 0
+    return open_cnt, done_cnt, proc_cnt
 
 def view(page: ft.Page) -> ft.View:
-    page.title = "Дашборд — Процесс Трекер"
+    v_open, v_done, v_proc = ft.Text("0", size=22, weight="w800"), ft.Text("0", size=22, weight="w800"), ft.Text("0", size=22, weight="w800")
 
-    # начальные значения
-    tasks_open_val = ft.Text("—", size=22, weight="w700")
-    tasks_done_val = ft.Text("—", size=22, weight="w700")
-    procs_total_val = ft.Text("—", size=22, weight="w700")
+    async def refresh():
+        o, d, p = await _load_counts()
+        v_open.value, v_done.value, v_proc.value = str(o), str(d), str(p)
+        try: page.update()
+        except Exception: pass
 
-    async def load_stats():
-        async with AsyncSessionLocal() as s:
-            # процессы
-            procs_total = await _safe_count(s, Process)
-            # задачи
-            open_count = await _count_open_tasks(s)
-            done_count = await _count_done_tasks(s)
+    page.run_task(refresh)
 
-        tasks_open_val.value = str(open_count)
-        tasks_done_val.value = str(done_count)
-        procs_total_val.value = str(procs_total)
-        try:
-            tasks_open_val.update()
-            tasks_done_val.update()
-            procs_total_val.update()
-        except Exception:
-            pass
-
-    # запускаем загрузку асинхронно (через Flet API)
-    if hasattr(page, "run_task"):
-        page.run_task(load_stats)
-    else:
-        # на всякий случай
-        import asyncio
-        try:
-            asyncio.get_running_loop().create_task(load_stats())
-        except RuntimeError:
-            asyncio.run(load_stats())
-
-    # карточки со статами
-    ic = ft.icons
-    stat_tasks_open = ft.Container(
-        content=ft.Column(
-            [ft.Text("Открытые задачи", size=12, color=ft.colors.ON_SURFACE_VARIANT), tasks_open_val],
-            spacing=4,
-            tight=True,
-        ),
-        padding=CARD_PAD,
-        border_radius=CARD_RADIUS,
-        border=ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.ON_SURFACE)),
-        bgcolor=ft.colors.with_opacity(0.06, ft.colors.SURFACE),
-    )
-    stat_tasks_done = ft.Container(
-        content=ft.Column(
-            [ft.Text("Завершено задач", size=12, color=ft.colors.ON_SURFACE_VARIANT), tasks_done_val],
-            spacing=4,
-            tight=True,
-        ),
-        padding=CARD_PAD,
-        border_radius=CARD_RADIUS,
-        border=ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.ON_SURFACE)),
-        bgcolor=ft.colors.with_opacity(0.06, ft.colors.SURFACE),
-    )
-    stat_processes = ft.Container(
-        content=ft.Column(
-            [ft.Text("Всего процессов", size=12, color=ft.colors.ON_SURFACE_VARIANT), procs_total_val],
-            spacing=4,
-            tight=True,
-        ),
-        padding=CARD_PAD,
-        border_radius=CARD_RADIUS,
-        border=ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.ON_SURFACE)),
-        bgcolor=ft.colors.with_opacity(0.06, ft.colors.SURFACE),
-    )
-
-    return ft.View(
-        route="/dashboard",
-        controls=[
-            navbar(page, "/dashboard"),
-            ft.Container(height=8),
-            ft.ResponsiveRow(
-                controls=[
-                    ft.Column(col={"xs": 12, "md": 4}, controls=[stat_tasks_open]),
-                    ft.Column(col={"xs": 12, "md": 4}, controls=[stat_tasks_done]),
-                    ft.Column(col={"xs": 12, "md": 4}, controls=[stat_processes]),
-                ],
-                columns=12,
-                spacing=12,
-            ),
+    grid = ft.Row(
+        [
+            kpi("Открытые задачи", v_open, icon=ft.icons.LOCAL_FIRE_DEPARTMENT if hasattr(ft.icons, "LOCAL_FIRE_DEPARTMENT") else ft.icons.WHATSHOT),
+            kpi("Завершено задач", v_done, icon=ft.icons.CHECK_CIRCLE_OUTLINE if hasattr(ft.icons, "CHECK_CIRCLE_OUTLINE") else ft.icons.CHECK_CIRCLE),
+            kpi("Всего процессов", v_proc, icon=ft.icons.WORKSPACES_OUTLINED if hasattr(ft.icons, "WORKSPACES_OUTLINED") else ft.icons.WORK),
         ],
-        padding=16,
-        scroll=ft.ScrollMode.AUTO,
+        spacing=16,
+        run_spacing=16,
+        wrap=True,
+        vertical_alignment=ft.CrossAxisAlignment.START,
     )
+
+    actions = ft.Row(
+        [
+            ft.FilledButton("Создать задачу", icon=ft.icons.ADD, on_click=lambda _: page.go("/tasks/create")),
+            ft.OutlinedButton("К процессам", icon=ft.icons.LIST, on_click=lambda _: page.go("/processes")),
+            ft.OutlinedButton("Настройки", icon=ft.icons.SETTINGS, on_click=lambda _: page.go("/settings")),
+        ],
+        spacing=10,
+    )
+
+    body = ft.Column(
+        [
+            ft.Text("Обзор", size=18, weight="w800"),
+            ft.Container(height=10),
+            grid,
+            ft.Container(height=12),
+            actions,
+        ],
+        spacing=0,
+        tight=True,
+    )
+
+    return page_scaffold(page, title="Дашборд", route="/dashboard", body=body)

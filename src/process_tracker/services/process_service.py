@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Sequence, Optional
+from typing import List, Optional, Callable, AsyncIterator, Awaitable
 
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import AsyncSessionLocal
@@ -11,49 +11,58 @@ from ..db.models import Process
 
 class ProcessService:
     """
-    Сервис работы с процессами. Сам управляет жизненным циклом сессии,
-    используя фабрику AsyncSessionLocal.
+    Сервис процессов с мягкой зависимостью от сессии:
+    - можно передать уже открытую AsyncSession
+    - можно создать без аргументов — он сам откроет AsyncSessionLocal()
     """
 
-    def __init__(self, session_factory=AsyncSessionLocal) -> None:
-        self._session_factory = session_factory
-
-    async def count_all(self) -> int:
-        async with self._session_factory() as session:  # type: AsyncSession
-            res = await session.execute(select(func.count(Process.id)))
-            return int(res.scalar_one())
-
-    async def list_recent(self, limit: int = 50) -> Sequence[Process]:
-        async with self._session_factory() as session:  # type: AsyncSession
-            res = await session.execute(
-                select(Process).order_by(desc(Process.created_at)).limit(max(1, limit))
-            )
-            return list(res.scalars().all())
-
-    # совместимость, если где-то вызывали get_recent()
-    async def get_recent(self, limit: int = 50) -> Sequence[Process]:
-        return await self.list_recent(limit=limit)
-
-    async def get(self, process_id: int) -> Optional[Process]:
-        async with self._session_factory() as session:  # type: AsyncSession
-            return await session.get(Process, process_id)
-
-    async def create(
+    def __init__(
         self,
-        title: str,
-        description: Optional[str] = None,
-        status: str = "new",
-    ) -> Process:
-        title = (title or "").strip()
-        if not title:
-            raise ValueError("title is required")
+        session: Optional[AsyncSession] = None,
+        session_factory: Optional[Callable[[], AsyncIterator[AsyncSession]]] = None,
+    ) -> None:
+        self._session: Optional[AsyncSession] = session
+        self._session_factory = session_factory  # не обязателен
 
-        async with self._session_factory() as session:  # type: AsyncSession
+    # ---- Вспомогательный контекст ----
+
+    async def _open_session(self) -> AsyncIterator[AsyncSession]:
+        if self._session is not None:
+            # уже есть внешняя сессия — просто отдаём её
+            yield self._session
+            return
+
+        if self._session_factory is not None:
+            # пользователь дал фабрику (async generator)
+            async for s in self._session_factory():
+                yield s
+            return
+
+        # по умолчанию — свой AsyncSessionLocal
+        async with AsyncSessionLocal() as s:
+            yield s
+
+    # ---- Операции ----
+
+    async def create(self, title: str, description: Optional[str], status: str = "new") -> Process:
+        async for s in self._open_session():
             obj = Process(title=title, description=description, status=status)
-            session.add(obj)
-            await session.commit()
-            await session.refresh(obj)
+            s.add(obj)
+            await s.flush()
+            await s.commit()
+            await s.refresh(obj)
             return obj
+        raise RuntimeError("No session available")
 
+    async def list_recent(self, *, limit: int = 50) -> List[Process]:
+        async for s in self._open_session():
+            res = await s.scalars(
+                select(Process)
+                .order_by(desc(getattr(Process, "updated_at", getattr(Process, "created_at", None))))
+                .limit(limit)
+            )
+            return list(res)
+        return []
 
-__all__ = ["ProcessService"]
+    async def get_recent(self, *, limit: int = 50) -> List[Process]:
+        return await self.list_recent(limit=limit)

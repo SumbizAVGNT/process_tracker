@@ -1,130 +1,197 @@
 from __future__ import annotations
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Optional, Any, Tuple
 
-from ..core.forms.schemas import FormSchema, FieldSchema, FieldType, FieldOption
-from ..core.forms.validators import validate_data
+from pydantic import BaseModel, Field, ValidationError
+
+
+class FieldOption(BaseModel):
+    value: str
+    label: str
+
+
+class FieldSchema(BaseModel):
+    name: str
+    title: str
+    type: str = Field(default="text")  # text|textarea|select|int|email|password|checkbox|date|datetime
+    required: bool = False
+    placeholder: Optional[str] = None
+    default: Optional[Any] = None
+
+    # для select
+    options: Optional[List[FieldOption]] = None
+
+    # простые ограничения
+    min_length: Optional[int] = None
+    max_length: Optional[int] = None
+    min_value: Optional[int] = None
+    max_value: Optional[int] = None
+
+
+class FormSchema(BaseModel):
+    id: str
+    title: str
+    fields: List[FieldSchema]
 
 
 class FormsService:
     """
-    Простой in-memory реестр схем форм.
-    Позже можно подменить на DAL (БД/kv-store), сигнатуры методов сохраняем.
+    Лёгкий in-memory реестр форм.
+    В бою можно заменить на БД/файлы/конфиг.
     """
 
-    def __init__(self, forms: Dict[str, FormSchema] | None = None) -> None:
+    def __init__(self, forms: Optional[Dict[str, FormSchema]] = None) -> None:
         self._forms: Dict[str, FormSchema] = forms or _default_forms()
 
-    async def list_forms(self) -> List[FormSchema]:
+    # ---- CRUD (упрощённо) ----
+
+    def list_forms(self) -> List[FormSchema]:
         return list(self._forms.values())
 
-    async def get_form(self, form_id: str) -> FormSchema:
-        try:
-            return self._forms[form_id]
-        except KeyError as e:
-            raise KeyError(f"form '{form_id}' not found") from e
+    def get_form(self, form_id: str) -> Optional[FormSchema]:
+        return self._forms.get(form_id)
 
-    async def validate(self, form_id: str, data: Dict[str, Any]) -> Tuple[bool, Dict[str, List[str]]]:
-        schema = await self.get_form(form_id)
-        return validate_data(schema, data)
+    def upsert_form(self, form: FormSchema) -> None:
+        self._forms[form.id] = form
 
+    def delete_form(self, form_id: str) -> bool:
+        return self._forms.pop(form_id, None) is not None
+
+    # ---- Валидация данных ----
+
+    def validate_data(self, form_id: str, data: Dict[str, Any]) -> Tuple[bool, Dict[str, str]]:
+        """
+        Возвращает (ok, errors). errors: {field: message}
+        """
+        form = self.get_form(form_id)
+        if not form:
+            return False, {"_": "Форма не найдена"}
+
+        errors: Dict[str, str] = {}
+
+        for f in form.fields:
+            val = data.get(f.name, None)
+
+            # required
+            if f.required and (val is None or (isinstance(val, str) and not val.strip())):
+                errors[f.name] = "Обязательное поле"
+                continue
+
+            if val is None:
+                continue  # пустое — дальше не проверяем
+
+            # типы (минимальный набор)
+            if f.type in ("text", "textarea", "email", "password", "select"):
+                if not isinstance(val, str):
+                    errors[f.name] = "Ожидается строка"
+                    continue
+                if f.min_length is not None and len(val) < f.min_length:
+                    errors[f.name] = f"Минимальная длина: {f.min_length}"
+                    continue
+                if f.max_length is not None and len(val) > f.max_length:
+                    errors[f.name] = f"Максимальная длина: {f.max_length}"
+                    continue
+                if f.type == "select" and f.options:
+                    opts = {o.value for o in f.options}
+                    if val not in opts:
+                        errors[f.name] = "Недопустимое значение"
+                        continue
+
+            elif f.type in ("int", "integer"):
+                try:
+                    iv = int(val)
+                except Exception:
+                    errors[f.name] = "Ожидается целое число"
+                    continue
+                if f.min_value is not None and iv < f.min_value:
+                    errors[f.name] = f"Минимальное значение: {f.min_value}"
+                    continue
+                if f.max_value is not None and iv > f.max_value:
+                    errors[f.name] = f"Максимальное значение: {f.max_value}"
+                    continue
+
+            # Прочие типы можно добавить по мере надобности
+
+        return (len(errors) == 0), errors
+
+
+# ---- дефолтные формы (демо) ----
 
 def _default_forms() -> Dict[str, FormSchema]:
     """
-    Набор демонстрационных форм:
-      - task.create: создание задачи
-      - incident.report: описание инцидента
+    Создаём пару демонстрационных форм.
+    ВАЖНО: Pydantic v2 → используем ТОЛЬКО именованные аргументы!
     """
-    task_create = FormSchema(
-        id="task.create",
-        name="Создание задачи",
-        version=1,
+    sev_opts = [
+        FieldOption(value="sev0", label="SEV0 — критический простой"),
+        FieldOption(value="sev1", label="SEV1 — критично"),
+        FieldOption(value="sev2", label="SEV2 — заметно"),
+        FieldOption(value="sev3", label="SEV3 — минор"),
+    ]
+
+    incident_form = FormSchema(
+        id="incident.create",
+        title="Инцидент",
         fields=[
             FieldSchema(
-                id="title",
-                label="Заголовок",
-                type=FieldType.TEXT,
+                name="title",
+                title="Заголовок",
+                type="text",
                 required=True,
                 min_length=3,
-                max_length=120,
-                ui={"placeholder": "Коротко опишите задачу"},
+                max_length=200,
+                placeholder="Коротко сформулируйте проблему",
             ),
             FieldSchema(
-                id="description",
-                label="Описание",
-                type=FieldType.TEXTAREA,
+                name="severity",
+                title="Критичность",
+                type="select",
+                required=True,
+                options=sev_opts,
+                default="sev2",
+            ),
+            FieldSchema(
+                name="details",
+                title="Описание",
+                type="textarea",
                 required=False,
                 max_length=4000,
-                ui={"min_lines": 3, "max_lines": 8},
-            ),
-            FieldSchema(
-                id="priority",
-                label="Приоритет",
-                type=FieldType.SELECT,
-                required=True,
-                options=[
-                    FieldOption(value="P1", label="P1 — критично"),
-                    FieldOption(value="P2", label="P2 — высоко"),
-                    FieldOption(value="P3", label="P3 — средне"),
-                    FieldOption(value="P4", label="P4 — низко"),
-                ],
-                ui={"dense": True},
-            ),
-            FieldSchema(
-                id="due_date",
-                label="Дедлайн",
-                type=FieldType.DATE,
-                required=False,
-            ),
-            FieldSchema(
-                id="assignee",
-                label="Исполнитель",
-                type=FieldType.USER,
-                required=False,
-                ui={"hint": "Оставьте пустым — назначим позже"},
+                placeholder="Что произошло, где воспроизводится, скриншоты и т.п.",
             ),
         ],
-        meta={"category": "tasks"},
     )
 
-    incident_report = FormSchema(
-        id="incident.report",
-        name="Отчёт об инциденте",
-        version=1,
+    task_form = FormSchema(
+        id="task.create",
+        title="Задача",
         fields=[
             FieldSchema(
-                id="summary",
-                label="Краткое описание",
-                type=FieldType.TEXT,
+                name="title",
+                title="Название",
+                type="text",
                 required=True,
-                min_length=5,
+                min_length=3,
                 max_length=200,
             ),
             FieldSchema(
-                id="impact",
-                label="Влияние",
-                type=FieldType.SELECT,
-                required=True,
-                options=[
-                    FieldOption("sev0", "SEV0 — критический простой"),
-                    FieldOption("sev1", "SEV1 — значимый сбой"),
-                    FieldOption("sev2", "SEV2 — частичное ухудшение"),
-                ],
+                name="assignee",
+                title="Исполнитель (email)",
+                type="email",
+                required=False,
+                max_length=200,
             ),
             FieldSchema(
-                id="systems",
-                label="Затронутые системы",
-                type=FieldType.MULTISELECT,
+                name="estimate",
+                title="Оценка (часы)",
+                type="int",
                 required=False,
-                options=[
-                    FieldOption("api", "Public API"),
-                    FieldOption("auth", "Auth Service"),
-                    FieldOption("db", "Database"),
-                    FieldOption("ui", "Frontend UI"),
-                ],
+                min_value=1,
+                max_value=999,
             ),
         ],
-        meta={"category": "incidents"},
     )
 
-    return {task_create.id: task_create, incident_report.id: incident_report}
+    return {
+        incident_form.id: incident_form,
+        task_form.id: task_form,
+    }

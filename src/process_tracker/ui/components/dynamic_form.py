@@ -1,116 +1,303 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Dict
-
+from typing import Any, Dict, List, Optional, Union, Callable, Awaitable
+import asyncio
 import flet as ft
 
-# Совместимость: icons/Icons
-if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
+# Совместимость с разными версиями Flet
+if not hasattr(ft, "icons") and hasattr(ft, "Icons"):  # pragma: no cover
     ft.icons = ft.Icons  # type: ignore[attr-defined]
 
-from .form_field import TextField, EmailField, IntegerField
-from .password_field import PasswordField
+# Мягкие зависимости
+try:
+    from ...services.forms_service import FormSchema, FieldSchema, FieldOption  # type: ignore
+except Exception:  # pragma: no cover
+    FormSchema = FieldSchema = FieldOption = object  # type: ignore
+
+try:
+    from .forms import async_button, toast  # type: ignore
+except Exception:  # pragma: no cover
+    def toast(page: ft.Page, message: str, *, kind: str = "info", duration_ms: int = 2500) -> None:
+        page.snack_bar = ft.SnackBar(content=ft.Text(message), open=True, duration=duration_ms)
+        page.update()
+    def async_button(page: ft.Page | None, text: str, *, task_factory=None, icon=None, **kw) -> ft.FilledButton:
+        async def _noop(): pass
+        btn = ft.FilledButton(text, icon=icon)
+        def _h(_e):
+            loop = asyncio.get_running_loop()
+            loop.create_task((task_factory or _noop)())
+        btn.on_click = _h
+        return btn
 
 
-def _dropdown_options(options: Iterable[Any]) -> list[ft.dropdown.Option]:
-    res: list[ft.dropdown.Option] = []
-    for item in options or []:
-        if isinstance(item, dict):
-            res.append(ft.dropdown.Option(item.get("value"), item.get("label") or item.get("value")))
-        else:
-            res.append(ft.dropdown.Option(item, str(item)))
+# ------------------------ НОРМАЛИЗАЦИЯ СХЕМЫ ------------------------
+
+def _is_pydantic(v: Any) -> bool:
+    return hasattr(v, "model_dump") and callable(getattr(v, "model_dump"))
+
+def _to_dict(v: Any) -> Dict[str, Any]:
+    if _is_pydantic(v):
+        return v.model_dump()
+    if isinstance(v, dict):
+        return v
+    return {}
+
+def _norm_fields(fields: Any) -> List[Dict[str, Any]]:
+    """
+    Превратить разные формы описания полей в единый List[dict].
+    Поддерживает:
+      - list[dict]
+      - list[FieldSchema]
+      - list[tuple[str, dict|FieldSchema]] (например, если пришло .items())
+      - dict[name] -> dict
+    """
+    res: List[Dict[str, Any]] = []
+    if fields is None:
+        return res
+
+    if isinstance(fields, dict):
+        fields = list(fields.values())
+
+    if not isinstance(fields, (list, tuple)):
+        return res
+
+    for it in fields:
+        # ("name", {...})
+        if isinstance(it, tuple) and len(it) == 2:
+            it = it[1]
+        d = _to_dict(it)
+        if not d:
+            continue
+
+        # options нормализуем в list[dict{value,label}]
+        opts = d.get("options")
+        if opts is not None:
+            if isinstance(opts, dict):
+                opts = list(opts.values())
+            if isinstance(opts, (list, tuple)):
+                norm: List[Dict[str, Any]] = []
+                for o in opts:
+                    if isinstance(o, tuple) and len(o) == 2:
+                        o = o[1]
+                    od = _to_dict(o)
+                    if not od and isinstance(o, str):
+                        od = {"value": o, "label": str(o)}
+                    if od:
+                        norm.append(od)
+                d["options"] = norm
+            else:
+                d["options"] = []
+        res.append(d)
     return res
 
+def _normalize_schema(schema: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
+    sch = _to_dict(schema)
+    sch["fields"] = _norm_fields(sch.get("fields"))
+    return sch
 
-def build_schema_fields(schema: Iterable[Dict[str, Any]]) -> List[ft.Control]:
-    """
-    Преобразует простую схему в список Flet-контролов.
-    Схема: список словарей с ключами:
-      - name (str, обязательно)
-      - type: text|email|password|integer|textarea|checkbox|select
-      - label, hint, required, options (для select), multiline_rows, icon
-      - value (значение по умолчанию)
-    """
-    controls: list[ft.Control] = []
 
-    for f in schema or []:
-        ftype = (f.get("type") or "text").lower()
-        name = f.get("name") or ""
-        label = f.get("label") or name.title()
-        hint = f.get("hint")
-        icon = f.get("icon")
-        value = f.get("value")
+# ------------------------ ПОСТРОИТЕЛЬ ПОЛЕЙ ------------------------
+
+def build_schema_fields(schema: Union[Dict[str, Any], Any]) -> List[ft.Control]:
+    sch = _normalize_schema(schema)
+    controls: List[ft.Control] = []
+
+    for f in sch.get("fields", []):
+        name: str = f.get("name") or ""
+        title: str = f.get("title") or name or "Поле"
+        ftype: str = (f.get("type") or "text").lower()
+        required: bool = bool(f.get("required") or False)
+        placeholder: Optional[str] = f.get("placeholder")
+        default: Any = f.get("default", None)
+
+        label_text = f"{title}{' *' if required else ''}"
 
         if ftype in ("text", "string"):
-            ctrl = TextField(label, value=value or "", hint_text=hint, icon=icon)
+            ctrl = ft.TextField(label=label_text, hint_text=placeholder, value=default or "")
+        elif ftype == "textarea":
+            ctrl = ft.TextField(label=label_text, hint_text=placeholder, value=default or "",
+                                multiline=True, min_lines=3, max_lines=8)
         elif ftype == "email":
-            ctrl = EmailField(label, value=value or "", hint_text=hint)
-        elif ftype in ("password", "secret"):
-            ctrl = PasswordField(label)
-            if value:
-                ctrl.value = str(value)
-        elif ftype in ("int", "integer", "number"):
-            ctrl = IntegerField(label, value=str(value or ""))
-        elif ftype in ("textarea", "multiline"):
-            rows = int(f.get("multiline_rows") or 4)
-            ctrl = ft.TextField(
-                label=label,
-                value=value or "",
-                hint_text=hint,
-                multiline=True,
-                min_lines=max(3, rows),
-                max_lines=max(3, rows),
-                dense=True,
-            )
-        elif ftype in ("checkbox", "bool", "boolean"):
-            ctrl = ft.Checkbox(label=label, value=bool(value))
-        elif ftype in ("select", "dropdown", "choice"):
-            ctrl = ft.Dropdown(
-                label=label,
-                value=value,
-                options=_dropdown_options(f.get("options") or []),
-                dense=True,
-            )
+            ctrl = ft.TextField(label=label_text, hint_text=placeholder or "name@company.com",
+                                value=default or "", keyboard_type=ft.KeyboardType.EMAIL)
+        elif ftype == "password":
+            ctrl = ft.TextField(label=label_text, value=default or "", password=True, can_reveal_password=True)
+        elif ftype in ("int", "integer"):
+            ctrl = ft.TextField(label=label_text, value=str(default) if default is not None else "",
+                                keyboard_type=ft.KeyboardType.NUMBER)
+        elif ftype == "select":
+            opts = f.get("options") or []
+            options = [ft.dropdown.Option(str(o.get("value"))) for o in opts
+                       if isinstance(o, dict) and "value" in o]
+            ctrl = ft.Dropdown(label=label_text, options=options,
+                               value=str(default) if default is not None else (options[0].key if options else None))
         else:
-            # неизвестный тип — рендерим как обычный текст
-            ctrl = TextField(label, value=value or "", hint_text=hint, icon=icon)
+            ctrl = ft.TextField(label=label_text, hint_text=placeholder, value=default or "")
 
-        # сохраняем имя поля для последующего извлечения данных
-        ctrl.data = {"name": name}
+        setattr(ctrl, "_df_name", name)
+        setattr(ctrl, "_df_type", ftype)
+        setattr(ctrl, "_df_required", required)
+        setattr(ctrl, "_df_meta", f)
         controls.append(ctrl)
 
     return controls
 
 
-class DynamicForm(ft.Column):
+# ------------------------ ДИНАМИЧЕСКАЯ ФОРМА ------------------------
+
+class DynamicForm(ft.Container):
     """
-    Простейший DynamicForm:
-      form = DynamicForm(schema, on_submit=lambda data: ...)
-      data -> dict[name] = value
+    Карточка-форма:
+      - не использует UserControl (совместимо со старыми Flet);
+      - собирает и валидирует данные локально;
+      - вызывает on_submit(data) если задан.
     """
+    def __init__(
+        self,
+        schema: Union[Dict[str, Any], Any],
+        on_submit: Optional[Callable[[Dict[str, Any]], Awaitable[Any]]] = None,
+        *,
+        submit_text: str = "Создать",
+        width: Optional[float] = 520,
+    ) -> None:
+        super().__init__()
+        self._schema = _normalize_schema(schema)
+        self._on_submit = on_submit
+        self._submit_text = submit_text
+        self._width = width
 
-    def __init__(self, schema: Iterable[Dict[str, Any]], *, on_submit=None, submit_text: str = "Сохранить"):
-        super().__init__(spacing=12, tight=True)
+        self._fields: List[ft.Control] = []
 
-        self._fields: list[ft.Control] = build_schema_fields(schema)
+        # визуальные параметры карточки
+        self.width = width
+        self.padding = ft.padding.all(16)
+        self.border_radius = 16
+        self.border = ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.ON_SURFACE))
+        self.bgcolor = ft.colors.with_opacity(0.04, ft.colors.SURFACE)
 
-        submit_btn = ft.FilledButton(
-            submit_text,
-            icon=getattr(ft.icons, "CHECK", None),
-            on_click=lambda _e: on_submit and on_submit(self.value_dict()),
-        )
+        # наполнение
+        self._build_content()
 
-        self.controls = [*self._fields, ft.Row([submit_btn], alignment=ft.MainAxisAlignment.END)]
+    # ---- helpers ----
 
-    # Извлечение значений
-    def value_dict(self) -> dict[str, Any]:
-        data: dict[str, Any] = {}
+    def _collect_values(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
         for c in self._fields:
-            name = (getattr(c, "data", {}) or {}).get("name")
+            name: str = getattr(c, "_df_name", None)
             if not name:
                 continue
-            if isinstance(c, ft.Checkbox):
-                data[name] = bool(c.value)
+            if isinstance(c, ft.Dropdown):
+                data[name] = c.value
+            elif isinstance(c, ft.TextField):
+                v = c.value or ""
+                ftype = getattr(c, "_df_type", "text")
+                if ftype in ("int", "integer"):
+                    try:
+                        data[name] = int(v) if str(v).strip() else None
+                    except Exception:
+                        data[name] = v
+                else:
+                    data[name] = v
             else:
                 data[name] = getattr(c, "value", None)
         return data
+
+    def _validate_local(self, data: Dict[str, Any]) -> Dict[str, str]:
+        errors: Dict[str, str] = {}
+        for c in self._fields:
+            meta: Dict[str, Any] = getattr(c, "_df_meta", {}) or {}
+            name: str = meta.get("name")
+            ftype: str = (meta.get("type") or "text").lower()
+            required: bool = bool(meta.get("required"))
+
+            val = data.get(name)
+
+            if required:
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    errors[name] = "Обязательное поле"
+                    continue
+
+            if val is None or (isinstance(val, str) and not val.strip()):
+                continue
+
+            if isinstance(val, str) and ftype in ("text", "textarea", "email", "password", "select"):
+                mn = meta.get("min_length")
+                mx = meta.get("max_length")
+                if mn is not None and len(val) < int(mn):
+                    errors[name] = f"Минимальная длина: {mn}"
+                    continue
+                if mx is not None and len(val) > int(mx):
+                    errors[name] = f"Максимальная длина: {mx}"
+                    continue
+
+            if ftype in ("int", "integer"):
+                try:
+                    iv = int(val)
+                except Exception:
+                    errors[name] = "Ожидается целое число"
+                    continue
+                mn = meta.get("min_value")
+                mx = meta.get("max_value")
+                if mn is not None and iv < int(mn):
+                    errors[name] = f"Минимум: {mn}"
+                    continue
+                if mx is not None and iv > int(mx):
+                    errors[name] = f"Максимум: {mx}"
+                    continue
+
+            if ftype == "select":
+                opts = meta.get("options") or []
+                allowed = {str(o.get("value")) for o in opts if isinstance(o, dict)}
+                if str(val) not in allowed:
+                    errors[name] = "Недопустимое значение"
+                    continue
+
+        return errors
+
+    async def _submit(self) -> None:
+        data = self._collect_values()
+        errors = self._validate_local(data)
+        if errors:
+            first = next(iter(errors))
+            toast(self.page, f"Ошибка: {errors[first]}", kind="error")
+            # подсветка
+            for c in self._fields:
+                nm = getattr(c, "_df_name", None)
+                try:
+                    if nm in errors:
+                        c.border = ft.border.all(1, ft.colors.RED)
+                        c.helper_text = errors[nm]
+                    else:
+                        c.border = None
+                        c.helper_text = None
+                    c.update()
+                except Exception:
+                    pass
+            return
+
+        if self._on_submit:
+            await self._on_submit(data)
+
+    def _build_content(self) -> None:
+        title = self._schema.get("title") or "Форма"
+        self._fields = build_schema_fields(self._schema)
+
+        submit_btn = async_button(
+            getattr(self, "page", None),
+            self._submit_text,
+            task_factory=self._submit,
+            icon=getattr(ft.icons, "CHECK", None),
+        )
+
+        col = ft.Column(
+            [
+                ft.Row([ft.Icon(ft.icons.TASK_ALT_OUTLINED, size=22), ft.Text(title, size=20, weight="w700")], spacing=10),
+                ft.Divider(opacity=0.06),
+                *self._fields,
+                ft.Container(height=8),
+                ft.Row([submit_btn], alignment=ft.MainAxisAlignment.END),
+            ],
+            spacing=10,
+            tight=True,
+        )
+        self.content = col

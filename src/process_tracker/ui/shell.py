@@ -1,99 +1,96 @@
 from __future__ import annotations
+import flet as ft
+from ..state import state
 
-"""
-Интерактивная dev-оболочка.
+# shims для старых версий Flet
+if not hasattr(ft, "icons") and hasattr(ft, "Icons"):  # pragma: no cover
+    ft.icons = ft.Icons  # type: ignore[attr-defined]
+if not hasattr(ft, "colors") and hasattr(ft, "Colors"):  # pragma: no cover
+    ft.colors = ft.Colors  # type: ignore[attr-defined]
+if not hasattr(ft, "alignment") and hasattr(ft, "Alignment"):  # pragma: no cover
+    ft.alignment = ft.Alignment  # type: ignore[attr-defined]
+if hasattr(ft, "colors") and not hasattr(ft.colors, "with_opacity"):  # pragma: no cover
+    def _with_opacity(opacity: float, color: str) -> str:
+        return color
+    ft.colors.with_opacity = staticmethod(_with_opacity)  # type: ignore
 
-Запуск из корня проекта:
-    python -m process_tracker.shell
+MAX_W = 1180
 
-Доступные имена в окружении:
-    settings, engine, AsyncSessionLocal, Base, models, arun, ping
-
-Пример:
-    In [1]: arun(ping())
-    In [2]: async def demo():
-       ...:     async with AsyncSessionLocal() as s:
-       ...:         res = await s.execute(text("select 42"))
-       ...:         print(res.scalar())
-       ...: 
-    In [3]: arun(demo())
-"""
-
-# --- shim для прямого запуска файла из src/ ---
-import sys
-from pathlib import Path
-
-if __package__ in (None, ""):
-    file = Path(__file__).resolve()
-    src_dir = file.parents[1]  # .../src
-    if str(src_dir) not in sys.path:
-        sys.path.insert(0, str(src_dir))
-
-import asyncio
-import code
-from typing import Any
-
-from process_tracker.core.config import settings
-from process_tracker.db.session import AsyncSessionLocal, engine
-from process_tracker.db.models import Base
-from process_tracker import db as models  # пакет с моделями
-from sqlalchemy import text
-
-
-def arun(awaitable):
-    """
-    Выполнить awaitable из REPL.
-    - Если уже в цикле (IPython с asyncio) — поднимет исключение.
-    - Иначе выполнит в новом цикле.
-    """
-    try:
-        asyncio.get_running_loop()
-        raise RuntimeError("Already in running loop, use `await` directly.")
-    except RuntimeError:
-        return asyncio.run(awaitable)
-
-
-async def ping() -> bool:
-    """
-    Простейшая проверка соединения с БД.
-    """
-    async with AsyncSessionLocal() as session:
-        res = await session.execute(text("SELECT 1"))
-        return bool(res.scalar())
-
-
-def _banner() -> str:
-    return (
-        "Process Tracker shell\n"
-        f" DB: {settings.db_url}\n"
-        " Names: settings, engine, AsyncSessionLocal, Base, models, arun, ping\n"
+def _nav_button(text: str, route: str, active_route: str, icon: str | None) -> ft.Container:
+    is_active = (route == active_route)
+    base = ft.TextButton(
+        text,
+        icon=icon,
+        on_click=lambda _: ft.Page.current.go(route) if ft.Page.current else None,
+    )
+    return ft.Container(
+        content=base,
+        bgcolor=ft.colors.with_opacity(0.06 if is_active else 0.0, ft.colors.SURFACE),
+        border_radius=20,
+        padding=ft.padding.symmetric(horizontal=10, vertical=4),
+        ink=True,
     )
 
+def topbar(page: ft.Page, active_route: str) -> ft.Container:
+    user = state.user_email or "Гость"
+    nav = ft.Row(
+        [
+            _nav_button("Дашборд", "/dashboard", active_route, ft.icons.DASHBOARD_OUTLINED if hasattr(ft.icons, "DASHBOARD_OUTLINED") else ft.icons.DASHBOARD),
+            _nav_button("Процессы", "/processes", active_route, ft.icons.LIST_ALT if hasattr(ft.icons, "LIST_ALT") else ft.icons.LIST),
+            _nav_button("Создать задачу", "/tasks/create", active_route, ft.icons.ADD_CIRCLE_OUTLINE if hasattr(ft.icons, "ADD_CIRCLE_OUTLINE") else ft.icons.ADD),
+            _nav_button("Настройки", "/settings", active_route, ft.icons.SETTINGS),
+        ],
+        spacing=4,
+        wrap=False,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    right = ft.Row(
+        [
+            ft.Icon(ft.icons.HELP_OUTLINE, size=16),
+            ft.Text("Справка", color=ft.colors.ON_SURFACE_VARIANT),
+            ft.Container(width=16),
+            ft.Icon(ft.icons.ACCOUNT_CIRCLE, size=18),
+            ft.Text(user, weight="w600"),
+        ],
+        spacing=6,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    bar = ft.Row(
+        [nav, ft.Container(expand=True), right],
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    return ft.Container(
+        content=bar,
+        padding=ft.padding.symmetric(horizontal=12, vertical=10),
+        bgcolor=ft.colors.with_opacity(0.04, ft.colors.SURFACE),
+        border_radius=12,
+        border=ft.border.all(1, ft.colors.with_opacity(0.06, ft.colors.ON_SURFACE)),
+    )
 
-def main() -> None:
-    ns: dict[str, Any] = {
-        "settings": settings,
-        "engine": engine,
-        "AsyncSessionLocal": AsyncSessionLocal,
-        "Base": Base,
-        "models": models,
-        "arun": arun,
-        "ping": ping,
-        "text": text,
-    }
+def page_scaffold(page: ft.Page, *, title: str, route: str, body: ft.Control) -> ft.View:
+    page.title = f"Процесс Трекер — {title}"
+    page.theme_mode = ft.ThemeMode.DARK
 
-    # IPython, если доступен
-    try:
-        from IPython import embed  # type: ignore
-        embed(user_ns=ns, banner1=_banner())
-        return
-    except Exception:
-        pass
+    content = ft.Container(
+        content=ft.Column(
+            [
+                topbar(page, route),
+                ft.Container(height=14),
+                body,
+            ],
+            spacing=0,
+            tight=True,
+        ),
+        padding=ft.padding.symmetric(horizontal=18, vertical=12),
+        alignment=ft.alignment.top_center,
+        expand=True,
+        width=MAX_W,
+    )
 
-    # stdlib REPL как fallback
-    console = code.InteractiveConsole(locals=ns)
-    console.interact(banner=_banner())
-
-
-if __name__ == "__main__":
-    main()
+    return ft.View(
+        route=route,
+        vertical_alignment=ft.MainAxisAlignment.START,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[content],
+    )

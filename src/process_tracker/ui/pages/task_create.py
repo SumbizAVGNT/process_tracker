@@ -1,30 +1,47 @@
-# пример: src/process_tracker/ui/pages/task_create.py
+from __future__ import annotations
 import flet as ft
-import httpx
-
-from ...core.forms.schemas import FormSchema
-from ..components.dynamic_form import DynamicForm
+from ...db.session import AsyncSessionLocal
+from ...services.process_service import ProcessService
+from ..components.shell import page_scaffold
+from ..components.forms import async_button, toast
 
 def view(page: ft.Page) -> ft.View:
-    async def load_schema() -> FormSchema:
-        # можно и без сети, если FormsService отдаёт in-memory
-        async with httpx.AsyncClient(base_url="http://127.0.0.1:8787") as xc:
-            r = await xc.get("/api/forms/task.create")
-            r.raise_for_status()
-            return FormSchema.model_validate(r.json())
+    title = ft.TextField(label="Название", hint_text="Коротко опишите задачу", expand=True)
+    desc = ft.TextField(label="Описание", hint_text="Детали…", multiline=True, min_lines=3, max_lines=6, expand=True)
+    status = ft.Dropdown(
+        label="Статус",
+        options=[ft.dropdown.Option("new"), ft.dropdown.Option("in_progress"), ft.dropdown.Option("done")],
+        value="new",
+        width=220,
+    )
 
-    async def on_submit(data: dict):
-        # TODO: отправить данные на API задач
-        print("submit:", data)
-        page.snack_bar = ft.SnackBar(ft.Text("Задача создана"), open=True)
+    async def submit():
+        t = (title.value or "").strip()
+        if not t:
+            toast(page, "Название обязательно", kind="warning"); return
+        async with AsyncSessionLocal() as s:
+            svc = ProcessService(s)
+            await svc.create(t, (desc.value or "").strip() or None, (status.value or "new"))
+        toast(page, "Задача создана", kind="success")
+        title.value, desc.value, status.value = "", "", "new"
         page.update()
 
-    # грузим схему лениво; для примера синхронно можно просто FormsService() использовать
-    # schema = await load_schema()  # в реальном коде обернуть в run_task
-    # пока используем статически — если импорт доступен:
-    from ...services.forms_service import FormsService
-    svc = FormsService()
-    schema = svc._forms["task.create"]  # demo
-
-    form = DynamicForm(schema, on_submit=on_submit)
-    return ft.View("/tasks/create", controls=[ft.Container(form, padding=16, expand=True)])
+    body = ft.Column(
+        [
+            ft.Text("Создать задачу", size=18, weight="w800"),
+            ft.Container(height=10),
+            ft.Row([title], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([desc], vertical_alignment=ft.CrossAxisAlignment.START),
+            ft.Row(
+                [
+                    status,
+                    ft.Container(expand=True),
+                    async_button(page, "Сохранить", task_factory=submit, icon=ft.icons.SAVE),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+        ],
+        spacing=10,
+        tight=True,
+    )
+    return page_scaffold(page, title="Создать задачу", route="/tasks/create", body=body)

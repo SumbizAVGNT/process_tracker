@@ -50,6 +50,8 @@ def _ensure_icon(name: str, *fallbacks: str) -> None:
 _ensure_icon("PENDING_ACTION", "SCHEDULE", "HOURGLASS_EMPTY", "HOURGLASS_TOP_OUTLINED", "LIST")
 _ensure_icon("TASK_ALT_OUTLINED", "TASK_ALT", "CHECK_CIRCLE")
 _ensure_icon("ROCKET_LAUNCH", "ROCKET_LAUNCH_OUTLINED", "ROCKET", "PLAY_ARROW")
+_ensure_icon("DATABASE", "STORAGE", "DATA_EXPLORATION", "BAR_CHART")
+_ensure_icon("DATABASE", "STORAGE", "DATA_EXPLORATION", "BAR_CHART")
 
 def main(page: ft.Page):
     setup_logging()
