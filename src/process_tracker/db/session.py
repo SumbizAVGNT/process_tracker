@@ -20,7 +20,7 @@ engine_kwargs: dict = dict(
     pool_pre_ping=True,
 )
 
-# Для SQLite оставим дефолтный NullPool/Singleton. Для других — можно настроить.
+# Для SQLite оставим дефолтный пул. Для других — настраиваем при наличии параметров.
 if not _is_sqlite:
     if hasattr(settings, "db_pool_size"):
         engine_kwargs["pool_size"] = getattr(settings, "db_pool_size")

@@ -1,4 +1,3 @@
-# src/process_tracker/db/models.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,11 +11,11 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     Index,
-    JSON,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from .types import JSON_AUTO as JSON
 
 # ───────────────────────── Base / Mixins ─────────────────────────
 
@@ -63,7 +62,8 @@ class Role(TimestampMixin, Base):
     __tablename__ = "roles"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(128))
     description: Mapped[Optional[str]] = mapped_column(Text)
 
     users: Mapped[List[User]] = relationship(
@@ -79,6 +79,7 @@ class Permission(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(128), unique=True, index=True)  # e.g. "tasks.read"
+    title: Mapped[Optional[str]] = mapped_column(String(255))
     description: Mapped[Optional[str]] = mapped_column(Text)
 
     roles: Mapped[List[Role]] = relationship(
@@ -106,7 +107,6 @@ class UserRole(Base):
 class RolePermission(Base):
     """
     Ассоциация Роль↔Разрешение.
-    Это как раз то, чего не хватало при импорте.
     """
     __tablename__ = "role_permissions"
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
@@ -139,7 +139,7 @@ class TaskType(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     key: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # e.g. "bug", "request"
     title: Mapped[str] = mapped_column(String(200))
-    # Вместо JSONB используем JSON — дружит с SQLite
+    # JSON_AUTO — JSONB в Postgres, JSON в SQLite
     default_fields: Mapped[dict] = mapped_column(JSON, default=dict)           # схема/дефолты для кастом-полей
     statuses: Mapped[List[str]] = mapped_column(JSON, default=list)            # допустимые статусы
     permissions: Mapped[List[str]] = mapped_column(JSON, default=list)         # опционально: специфичные права

@@ -1,8 +1,8 @@
 from __future__ import annotations
 """
 DB package public API:
-- init_db()   — идемпотентная инициализация схемы
-- drop_db()   — дроп всех таблиц
+- init_db()      — идемпотентная инициализация схемы
+- drop_db()      — дроп всех таблиц
 - bootstrap_db() — миграции (если есть alembic) + сид RBAC
 """
 
@@ -59,7 +59,7 @@ async def bootstrap_db() -> None:
     except Exception:
         pass
 
-    # 2) сид RBAC (необязателен для старта)
+    # 2) сид RBAC (необязателен для старта, но желателен)
     try:
         from .seed import seed_rbac
         async with AsyncSessionLocal() as s:

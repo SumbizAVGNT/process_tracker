@@ -5,7 +5,6 @@ from sqlalchemy import JSON, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 
-
 # Универсальный JSON-тип:
 #  - PostgreSQL → JSONB
 #  - остальные диалекты → JSON (обычно текст с функциями json1 у SQLite)
@@ -14,7 +13,7 @@ JSON_AUTO = JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
 
 # Компиляция JSONB под SQLite (иные диалекты просто используют нативный механизм)
 @compiles(JSONB, "sqlite")
-def _compile_jsonb_sqlite(_element, _compiler, **_kw) -> str:
+def _compile_jsonb_sqlite(_element, _compiler, **_kw) -> str:  # pragma: no cover
     # SQLite не знает тип JSONB, рендерим как JSON
     return "JSON"
 

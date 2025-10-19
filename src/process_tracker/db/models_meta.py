@@ -12,6 +12,7 @@ from .models import (  # noqa: F401
     Task,
     Process,
     FormDef,
+    FormSubmission,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "Task",
     "Process",
     "FormDef",
+    "FormSubmission",
 ]

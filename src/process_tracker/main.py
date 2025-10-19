@@ -1,11 +1,9 @@
-# src/process_tracker/main.py
 from __future__ import annotations
 
 import os
 import sys
 import importlib
 from pathlib import Path
-from types import ModuleType
 from typing import Callable
 
 
@@ -13,6 +11,7 @@ def _clean_sys_path() -> None:
     """
     1) Гарантируем, что в sys.path есть <project>/src (и он стоит ПЕРВЫМ).
     2) Убираем потенциально ломающие записи типа .../src/process_tracker.
+    3) Рабочую директорию ставим в корень проекта.
     """
     this_file = Path(__file__).resolve()
     pkg_dir = this_file.parent           # .../src/process_tracker
@@ -25,11 +24,19 @@ def _clean_sys_path() -> None:
         sys.path.remove(src_s)
     sys.path.insert(0, src_s)
 
-    # 2) убрать .../src/process_tracker из sys.path (мешает абсолютным импортам)
-    bad = str(pkg_dir)
-    sys.path[:] = [p for p in sys.path if Path(p).resolve() != pkg_dir]
+    # 2) убрать все варианты путей, указывающих прямо на пакет
+    cleaned = []
+    for p in sys.path:
+        try:
+            rp = str(Path(p).resolve())
+        except Exception:
+            rp = p
+        if rp.endswith(str(pkg_dir)) or rp.endswith(os.path.join("src", "process_tracker")):
+            continue
+        cleaned.append(p)
+    sys.path[:] = cleaned
 
-    # На всякий случай: рабочую директорию ставим в корень проекта
+    # 3) рабочая директория — корень проекта
     try:
         os.chdir(proj_dir)
     except Exception:
@@ -41,21 +48,23 @@ def _try_import_run() -> Callable[[], None]:
     Возвращает функцию run() из process_tracker.app.
     Пытается несколькими способами и прокидывает исходный traceback при ошибке.
     """
-    # Вариант А: обычный пакетный импорт
+    # Вариант A: обычный пакетный импорт
+    err_a: Exception | None = None
     try:
         mod = importlib.import_module("process_tracker.app")
         run = getattr(mod, "run")
         if callable(run):
             return run  # type: ignore[return-value]
     except Exception as e_a:
-        err_a = e_a  # запомним
+        err_a = e_a
 
-    # Вариант B: если запускается как пакет внутри src-layout
+    # Вариант B: относительный импорт при запуске как пакет из src-layout
+    err_b: Exception | None = None
     try:
-        from .app import run as run_rel  # type: ignore[no-redef]
+        from .app import run as run_rel  # type: ignore
         return run_rel
     except Exception as e_b:
-        err_b = e_b  # запомним
+        err_b = e_b
 
     # Если дошли сюда — оба способа не сработали
     msg = (
