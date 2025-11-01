@@ -51,11 +51,11 @@ def _perm_match(perm: str, granted: set[str]) -> bool:
 
         g_parts = g.split(".")
 
-        # Сравнение по сегментам со звёздочкой как wildcard сегмента
-        # Пример: p=task.create.item  g=task.*  → ok
-        #         p=task.create        g=*.create → ok
-        #         p=task.a.edit        g=task.*.edit → ok
-        # Разная длина: допускаем, что хвост у шаблона может быть "*"
+        # Сравнение по сегментам со звёздочкой как wildcard сегмента.
+        # Примеры:
+        #   p=task.create.item, g=task.*         → True
+        #   p=task.create,      g=*.create      → True
+        #   p=task.a.edit,      g=task.*.edit   → True
         max_len = max(len(p_parts), len(g_parts))
         ok = True
         for i in range(max_len):
@@ -107,7 +107,7 @@ class AppState:
         p = _norm(perm)
         if not p:
             return False
-        granted = { _norm(x) for x in self.permissions }
+        granted = {_norm(x) for x in self.permissions}
         return _perm_match(p, granted)
 
     def grant(self, *perms: Iterable[str] | str) -> None:
@@ -221,6 +221,7 @@ class AppState:
         perms = len(self.permissions)
         return f"<AppState {auth} email={self.user_email!r} roles=[{roles}] perms={perms} ctx={len(self.ctx)}>"
 
-
 # Синглтон состояния приложения
 state = AppState()
+
+__all__ = ["AppState", "state"]

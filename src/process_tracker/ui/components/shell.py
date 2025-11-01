@@ -1,4 +1,6 @@
+# src/process_tracker/ui/components/shell.py
 from __future__ import annotations
+
 import flet as ft
 from ..state import state
 
@@ -12,7 +14,7 @@ def _alpha(color: str, a: float) -> str:
     except Exception:
         return color
 
-# Градиент — берём из theme, если есть
+# Градиент — берём из theme, если есть (мягкая зависимость)
 try:
     from .theme import _alpha as theme_alpha, brand_gradient as theme_brand_gradient  # type: ignore
     def brand_gradient() -> ft.LinearGradient: return theme_brand_gradient()
@@ -28,7 +30,7 @@ except Exception:
             ],
         )
 
-# Навбар с мягким фоллбеком
+# Навбар — мягкая зависимость, есть запасной вариант
 try:
     from .navbar import navbar  # type: ignore
 except Exception:
@@ -107,14 +109,14 @@ def page_scaffold(
     except Exception:
         pass
 
-    # Составляем "chrome"
+    # Составляем «chrome»
     chrome_children: list[ft.Control] = []
     if show_topbar:
         chrome_children += [_topbar(page), ft.Container(height=10)]
     if show_nav:
         chrome_children += [navbar(page, route), ft.Container(height=10)]
 
-    # Центрация контента: кладём body внутрь "кармана", чтобы ignore-ить его expand
+    # Центровка контента
     if center:
         centered_slot = ft.Container(content=body, alignment=ft.alignment.center)
         content_area: ft.Control = ft.Column(

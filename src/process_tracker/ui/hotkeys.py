@@ -5,7 +5,7 @@ def attach_hotkeys(page: ft.Page) -> None:
     # защита от повторной регистрации
     if getattr(page, "_hotkeys_attached", False):
         return
-    page._hotkeys_attached = True  # type: ignore[attr-defined]
+    setattr(page, "_hotkeys_attached", True)  # type: ignore[attr-defined]
 
     async def _open_palette():
         try:
@@ -30,18 +30,20 @@ def attach_hotkeys(page: ft.Page) -> None:
 
     def _on_key(e: ft.KeyboardEvent) -> None:
         key = (e.key or "").lower()
-        ctrl = e.ctrl or e.meta
-        alt  = e.alt
+        ctrl = bool(e.ctrl or e.meta)
+        alt  = bool(e.alt)
 
         if ctrl and key == "k":
-            page.run_task(_open_palette) if hasattr(page, "run_task") else None
+            if hasattr(page, "run_task"):
+                page.run_task(_open_palette)  # type: ignore[attr-defined]
         elif alt and key == "n":
-            page.run_task(_quick_create) if hasattr(page, "run_task") else None
+            if hasattr(page, "run_task"):
+                page.run_task(_quick_create)  # type: ignore[attr-defined]
         elif key == "/":
             # попытаться сфокусировать глобальный поиск (если появится)
             try:
-                if hasattr(page, "_global_search"):  # type: ignore[attr-defined]
-                    page._global_search.focus()       # type: ignore[attr-defined]
+                if hasattr(page, "_global_search"):           # type: ignore[attr-defined]
+                    page._global_search.focus()               # type: ignore[attr-defined]
                     page.update()
             except Exception:
                 pass

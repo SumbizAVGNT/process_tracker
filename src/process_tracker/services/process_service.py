@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Callable, AsyncIterator, Awaitable
+from typing import List, Optional, Callable, AsyncIterator
 
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,9 +44,12 @@ class ProcessService:
 
     # ---- Операции ----
 
-    async def create(self, title: str, description: Optional[str], status: str = "new") -> Process:
+    async def create(self, name: str, description: Optional[str], status: str = "new") -> Process:
+        """
+        NB: модель Process имеет поле `name`, а не `title`.
+        """
         async for s in self._open_session():
-            obj = Process(title=title, description=description, status=status)
+            obj = Process(name=name, description=description, status=status)
             s.add(obj)
             await s.flush()
             await s.commit()
@@ -56,9 +59,11 @@ class ProcessService:
 
     async def list_recent(self, *, limit: int = 50) -> List[Process]:
         async for s in self._open_session():
+            # TimestampMixin: есть created_at/updated_at — используем updated_at если доступен
+            order_col = getattr(Process, "updated_at", None) or getattr(Process, "created_at", None)
             res = await s.scalars(
                 select(Process)
-                .order_by(desc(getattr(Process, "updated_at", getattr(Process, "created_at", None))))
+                .order_by(desc(order_col))
                 .limit(limit)
             )
             return list(res)

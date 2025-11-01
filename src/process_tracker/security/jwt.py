@@ -1,6 +1,15 @@
 from __future__ import annotations
-import base64, json, hmac, hashlib, time
-from typing import Any, Dict, Optional
+"""
+Мини-JWT (HS256) без внешних зависимостей.
+Поддерживает encode(payload, secret, exp_seconds) и decode(token, secret).
+"""
+
+import base64
+import json
+import hmac
+import hashlib
+import time
+from typing import Any, Dict
 
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -22,7 +31,8 @@ def encode(payload: Dict[str, Any], secret: str, *, exp_seconds: int = 3600) -> 
     s = _b64(sig)
     return f"{h}.{p}.{s}"
 
-class JWTError(Exception): ...
+class JWTError(Exception):
+    ...
 
 def decode(token: str, secret: str) -> Dict[str, Any]:
     try:

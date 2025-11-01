@@ -1,44 +1,39 @@
 from __future__ import annotations
 import flet as ft
-from sqlalchemy import text
 
-from ...db.session import AsyncSessionLocal
 from ..components.shell import page_scaffold
-from ..components.forms import async_button, toast
-from ..components.theme import card  # card(content)
+from ..components.theme import card
+from ..components.forms import toast
 
 def view(page: ft.Page) -> ft.View:
-    db_url = ft.TextField(label="Строка подключения (readonly)", value="(см. .env)", read_only=True, expand=True)
+    theme_dd = ft.Dropdown(
+        label="Тема",
+        options=[ft.dropdown.Option("dark", "Тёмная"), ft.dropdown.Option("light", "Светлая")],
+        value="dark", dense=True, width=240,
+    )
+    density_dd = ft.Dropdown(
+        label="Плотность интерфейса",
+        options=[ft.dropdown.Option("comfortable", "Комфортная"), ft.dropdown.Option("compact", "Компактная")],
+        value="comfortable", dense=True, width=240,
+    )
+    save_btn = ft.FilledButton("Сохранить", icon=ft.icons.SAVE, on_click=lambda _e: toast(page, "Настройки сохранены", kind="success"))
 
-    async def test_db():
-        try:
-            async with AsyncSessionLocal() as s:
-                res = await s.execute(text("SELECT 1"))
-                ok = bool(res.scalar())
-            toast(page, "БД доступна" if ok else "Нет ответа", kind="success" if ok else "error")
-        except Exception as e:
-            toast(page, f"Ошибка БД: {e}", kind="error")
-
-    form_card = card(
-        ft.Column(
-            [
-                ft.Text("Настройки", size=20, weight="w800"),
-                ft.Container(height=10),
-                db_url,
-                ft.Container(height=6),
-                ft.Row(
-                    [
-                        async_button(page, "Проверить БД", task_factory=test_db, icon="STORAGE"),
-                        ft.OutlinedButton("Открыть процессы", icon=ft.icons.LIST, on_click=lambda _: page.go("/processes")),
-                        ft.OutlinedButton("На дашборд", icon=ft.icons.DASHBOARD, on_click=lambda _: page.go("/dashboard")),
-                    ],
-                    spacing=10,
-                ),
-            ],
-            spacing=10,
-            tight=True,
-        )
+    prefs = card(
+        "Интерфейс",
+        ft.Column([ft.Row([theme_dd, density_dd], spacing=10), save_btn], spacing=10, tight=True),
+        icon=ft.icons.STYLE,
     )
 
-    form = ft.Container(content=form_card, padding=18)
-    return page_scaffold(page, title="Настройки", route="/settings", body=form)
+    account = card(
+        "Аккаунт",
+        ft.Column(
+            [
+                ft.Text("Изменение пароля и email — позже 😉", color=ft.colors.ON_SURFACE_VARIANT),
+            ],
+            spacing=8, tight=True,
+        ),
+        icon=ft.icons.PERSON,
+    )
+
+    content = ft.Column([prefs, account], spacing=12, tight=True)
+    return page_scaffold(page, title="Настройки", route="/settings", body=content)

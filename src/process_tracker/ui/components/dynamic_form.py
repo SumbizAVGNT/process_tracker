@@ -9,29 +9,59 @@ import flet as ft
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):  # pragma: no cover
     ft.icons = ft.Icons  # type: ignore[attr-defined]
 
-# ── Мягкие зависимости
+# ────────────────────────────── локальный toast ──────────────────────────────
+def _alpha(c: str, a: float) -> str:
+    try:
+        return ft.colors.with_opacity(a, c)
+    except Exception:
+        return c
+
+def _toast(page: ft.Page, message: str, *, kind: str = "info", duration_ms: int = 2500) -> None:
+    kind = (kind or "info").lower()
+    if kind == "success":
+        icon, bg = ft.icons.CHECK_CIRCLE, _alpha(ft.colors.GREEN, 0.12)
+    elif kind in ("warn", "warning"):
+        icon, bg = (getattr(ft.icons, "WARNING_AMBER", ft.icons.WARNING)), _alpha(ft.colors.AMBER, 0.12)
+    elif kind in ("error", "danger"):
+        icon, bg = ft.icons.ERROR_OUTLINE, _alpha(ft.colors.RED, 0.12)
+    else:
+        icon, bg = ft.icons.INFO, _alpha(getattr(ft.colors, "SURFACE_VARIANT", ft.colors.GREY), 0.12)
+
+    content = ft.Row(
+        [ft.Icon(icon, size=18), ft.Text(message)],
+        spacing=10, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    page.snack_bar = ft.SnackBar(
+        content=content, open=True, bgcolor=bg, duration=duration_ms, show_close_icon=True
+    )
+    page.update()
+
+# ───────────────────── безопасный планировщик корутин ───────────────────────
+def _schedule(page: Optional[ft.Page], coro: Awaitable[Any]) -> None:
+    async def _wrap():  # оборачиваем, чтобы page.run_task принял функцию
+        await coro
+
+    # 1) предпочтительно — page.run_task
+    if page is not None and hasattr(page, "run_task"):
+        try:
+            page.run_task(_wrap)  # type: ignore[arg-type]
+            return
+        except Exception:
+            pass
+    # 2) если есть активный loop — создаём задачу
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_wrap())
+        return
+    except RuntimeError:
+        # 3) крайний случай — синхронный запуск (может блокировать)
+        asyncio.run(_wrap())
+
+# ───────────────────── мягкие зависимости (типовые модели) ──────────────────
 try:
     from ...services.forms_service import FormSchema, FieldSchema, FieldOption  # type: ignore
 except Exception:  # pragma: no cover
     FormSchema = FieldSchema = FieldOption = object  # type: ignore
-
-# toast / async_button — можно не иметь модуль forms
-try:
-    from .forms import async_button, toast  # type: ignore
-except Exception:  # pragma: no cover
-    def toast(page: ft.Page, message: str, *, kind: str = "info", duration_ms: int = 2500) -> None:
-        page.snack_bar = ft.SnackBar(content=ft.Text(message), open=True, duration=duration_ms)
-        page.update()
-
-    def async_button(page: ft.Page | None, text: str, *, task_factory=None, icon=None, **kw) -> ft.FilledButton:
-        async def _noop(): ...
-        btn = ft.FilledButton(text, icon=icon)
-        def _h(_e):
-            loop = asyncio.get_running_loop()
-            loop.create_task((task_factory or _noop)())
-        btn.on_click = _h
-        return btn
-
 
 # ========================  УТИЛИТЫ / НОРМАЛИЗАЦИЯ  =========================
 
@@ -53,7 +83,7 @@ def _norm_fields(fields: Any) -> List[Dict[str, Any]]:
     Поддерживает:
       - list[dict]
       - list[FieldSchema]
-      - list[tuple[str, dict|FieldSchema]] (например, если пришло .items())
+      - list[tuple[str, dict|FieldSchema]]
       - dict[name] -> dict
     """
     res: List[Dict[str, Any]] = []
@@ -88,7 +118,6 @@ def _norm_fields(fields: Any) -> List[Dict[str, Any]]:
                     if not od and isinstance(o, str):
                         od = {"value": o, "label": str(o)}
                     if od:
-                        # единые ключи
                         od = {
                             "value": od.get("value", od.get("key", od.get("id"))),
                             "label": od.get("label", od.get("text", od.get("name", ""))),
@@ -114,7 +143,6 @@ def _bool(v: Any) -> bool:
     if isinstance(v, str):
         return v.strip().lower() in {"1", "true", "yes", "y", "on"}
     return False
-
 
 # ===========================  ПОСТРОИТЕЛЬ ПОЛЕЙ  ===========================
 
@@ -206,8 +234,7 @@ def build_schema_fields(schema: Union[Dict[str, Any], Any]) -> List[ft.Control]:
                 content=ft.Column(rg_options, tight=True, spacing=4),
                 value=str(default) if default is not None else (rg_options[0].value if rg_options else None),
             )
-            # подпись выведем отдельным Text рядом при отрисовке
-            setattr(ctrl, "_df_label", label_text)
+            setattr(ctrl, "_df_label", label_text)  # подпись выведем отдельно
         else:
             ctrl = _text_field_base(label_text, hint=placeholder, value=default)
 
@@ -217,14 +244,12 @@ def build_schema_fields(schema: Union[Dict[str, Any], Any]) -> List[ft.Control]:
         setattr(ctrl, "_df_required", required)
         setattr(ctrl, "_df_meta", f)
 
-        # helper / description
         if isinstance(ctrl, ft.TextField):
             ctrl.helper_text = helper
 
         controls.append(ctrl)
 
     return controls
-
 
 # =============================  ДИНАМИЧЕСКАЯ ФОРМА  ==========================
 
@@ -257,13 +282,12 @@ class DynamicForm(ft.Container):
         self.width = width
         self.padding = ft.padding.all(16)
         self.border_radius = 16
-        self.border = ft.border.all(1, ft.colors.with_opacity(0.08, ft.colors.ON_SURFACE))
-        self.bgcolor = ft.colors.with_opacity(0.04, ft.colors.SURFACE)
+        self.border = ft.border.all(1, _alpha(ft.colors.ON_SURFACE, 0.08))
+        self.bgcolor = _alpha(ft.colors.SURFACE, 0.04)
 
         self._build_content()
 
     # ---- API ----
-
     def set_values(self, data: Dict[str, Any]) -> None:
         """Программно проставить значения по имени поля."""
         for c in self._fields:
@@ -288,7 +312,6 @@ class DynamicForm(ft.Container):
             pass
 
     # ---- helpers ----
-
     def _collect_values(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
         for c in self._fields:
@@ -299,7 +322,7 @@ class DynamicForm(ft.Container):
                 data[name] = c.value
             elif isinstance(c, ft.RadioGroup):
                 data[name] = c.value
-            elif isinstance(c, ft.Switch) or isinstance(c, ft.Checkbox):
+            elif isinstance(c, (ft.Switch, ft.Checkbox)):
                 data[name] = bool(c.value)
             elif isinstance(c, ft.TextField):
                 v = c.value or ""
@@ -336,7 +359,6 @@ class DynamicForm(ft.Container):
                     errors[name] = "Обязательное поле"
                     continue
                 if isinstance(val, bool) and ftype in ("switch", "boolean", "bool", "checkbox"):
-                    # для булевых required= True значит, что должен быть True
                     if val is False:
                         errors[name] = "Необходимо включить"
                         continue
@@ -407,7 +429,7 @@ class DynamicForm(ft.Container):
         errors = self._validate_local(data)
         if errors:
             first = next(iter(errors))
-            toast(self.page, f"Ошибка: {errors[first]}", kind="error")
+            _toast(self.page, f"Ошибка: {errors[first]}", kind="error")
             # подсветка
             for c in self._fields:
                 nm = getattr(c, "_df_name", None)
@@ -439,7 +461,6 @@ class DynamicForm(ft.Container):
         target = max(float(self._width) - 48, 320)
         for c in self._fields:
             try:
-                # Не трогаем RadioGroup со своей колонкой
                 if isinstance(c, ft.RadioGroup):
                     continue
                 if getattr(c, "width", None) in (None, 0):
@@ -463,27 +484,22 @@ class DynamicForm(ft.Container):
         self._fields = build_schema_fields(self._schema)
         self._apply_field_widths()
 
-        submit_btn = async_button(
-            getattr(self, "page", None),
-            self._submit_text,
-            task_factory=self._submit,
-            icon=getattr(ft.icons, "CHECK", None),
-        )
+        # Кнопка сабмита без зависимостей от forms.async_button
+        submit_btn = ft.FilledButton(text=self._submit_text, icon=getattr(ft.icons, "CHECK", None))
+        def _on_click(_e: ft.ControlEvent) -> None:
+            _schedule(getattr(self, "page", None), self._submit())
+        submit_btn.on_click = _on_click
 
         fields_block = self._wrap_with_labels(self._fields)
 
         col = ft.Column(
             [
-                ft.Row(
-                    [ft.Icon(ft.icons.TASK_ALT_OUTLINED, size=22), ft.Text(title, size=20, weight="w700")],
-                    spacing=10,
-                ),
+                ft.Row([ft.Icon(ft.icons.TASK_ALT_OUTLINED, size=22), ft.Text(title, size=20, weight="w700")], spacing=10),
                 ft.Divider(opacity=0.06),
                 *fields_block,
                 ft.Container(height=8),
                 ft.Row([submit_btn], alignment=ft.MainAxisAlignment.END),
             ],
-            spacing=10,
-            tight=True,
+            spacing=10, tight=True,
         )
         self.content = col

@@ -121,7 +121,7 @@ async def a_retry(
     delay: float = 0.5,
     backoff: float = 2.0,
     jitter: float = 0.1,
-    retry_on: tuple[type[BaseException], ...] = (Exception,),
+    retry_on: tuple[type[BaseException], ...] = (Exception, ),
     on_retry: Optional[Callable[[int, BaseException], None]] = None,
 ) -> T:
     """

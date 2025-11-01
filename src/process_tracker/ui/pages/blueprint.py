@@ -5,6 +5,7 @@ import flet as ft
 from ..components.shell import page_scaffold
 
 
+# ── helpers ──────────────────────────────────────────────────────────────────
 def _alpha(c: str, a: float) -> str:
     try:
         return ft.colors.with_opacity(a, c)
@@ -12,24 +13,47 @@ def _alpha(c: str, a: float) -> str:
         return c
 
 
-def _section_card(title: str, bullets: list[str], *, icon=None) -> ft.Container:
+def _icon(name: str):
+    return getattr(ft.icons, name, None)
+
+
+def _section_card(
+    title: str,
+    bullets: list[str],
+    *,
+    icon=None,
+    actions: list[ft.Control] | None = None,
+) -> ft.Container:
     head = ft.Row(
-        [ft.Icon(icon or ft.icons.AUTO_AWESOME, size=16), ft.Text(title, size=13, color=ft.colors.ON_SURFACE_VARIANT)],
+        [
+            ft.Icon(icon or _icon("AUTO_AWESOME"), size=16),
+            ft.Text(title, size=13, color=ft.colors.ON_SURFACE_VARIANT),
+        ],
         spacing=8,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
     items = ft.Column(
         [
-            ft.Row([ft.Icon(ft.icons.CHECK_CIRCLE_OUTLINE, size=14, opacity=0.9), ft.Text(b, selectable=True)], spacing=8)
+            ft.Row(
+                [ft.Icon(_icon("CHECK_CIRCLE_OUTLINE"), size=14, opacity=0.9), ft.Text(b, selectable=True)],
+                spacing=8,
+            )
             for b in bullets
         ],
         spacing=6,
         tight=True,
     )
 
+    col = ft.Column([head, ft.Container(height=8), items], spacing=0, tight=True)
+    if actions:
+        col.controls += [
+            ft.Container(height=8),
+            ft.Row(actions, alignment=ft.MainAxisAlignment.END, spacing=8),
+        ]
+
     return ft.Container(
-        content=ft.Column([head, ft.Container(height=8), items], spacing=0, tight=True),
+        content=col,
         padding=14,
         border_radius=14,
         bgcolor=_alpha(ft.colors.SURFACE, 0.06),
@@ -38,7 +62,7 @@ def _section_card(title: str, bullets: list[str], *, icon=None) -> ft.Container:
 
 
 def _grid(cards: list[ft.Control]) -> ft.Row:
-    # совместимая сетка: перенос по рядам без ResponsiveRow
+    # Совместимая сетка: перенос по рядам без ResponsiveRow
     tile_w = 440
     return ft.Row(
         [ft.Container(c, width=tile_w) for c in cards],
@@ -49,9 +73,9 @@ def _grid(cards: list[ft.Control]) -> ft.Row:
     )
 
 
-def view(page: ft.Page) -> ft.View:
-    # ----- вкладка 1: Базовый Фундамент -------------------------------------------------
-    t1_cards = _grid(
+# ── контент вкладок ──────────────────────────────────────────────────────────
+def _tab1(page: ft.Page) -> ft.Control:
+    return _grid(
         [
             _section_card(
                 "Гибкость и настраиваемость",
@@ -60,7 +84,25 @@ def view(page: ft.Page) -> ft.View:
                     "Разные типы процессов с собственными полями и правилами.",
                     "Ветвления/параллельные этапы/условия в маршрутах.",
                 ],
-                icon=ft.icons.BUILD_CIRCLE_OUTLINED,
+                icon=_icon("BUILD_CIRCLE_OUTLINED"),
+                actions=[
+                    ft.FilledButton(
+                        "Конструктор форм",
+                        icon=_icon("DYNAMIC_FORM"),
+                        on_click=lambda _e: page.go("/blueprint/designer?tab=forms"),
+                    ),
+                    ft.OutlinedButton(
+                        "Статусы и роли",
+                        icon=_icon("ADMIN_PANEL_SETTINGS"),
+                        # в дизайнере это вторая вкладка; параметр ожидается как "types"
+                        on_click=lambda _e: page.go("/blueprint/designer?tab=types"),
+                    ),
+                    ft.OutlinedButton(
+                        "Маршруты",
+                        icon=_icon("SCHEMA"),
+                        on_click=lambda _e: page.go("/blueprint/designer?tab=routes"),
+                    ),
+                ],
             ),
             _section_card(
                 "Права доступа (RBAC)",
@@ -68,7 +110,15 @@ def view(page: ft.Page) -> ft.View:
                     "Тонкие разрешения: читать/создавать/редактировать/удалять.",
                     "Группы/роли + маски вроде task.* и admin.*.",
                 ],
-                icon=ft.icons.ADMIN_PANEL_SETTINGS_OUTLINED,
+                icon=_icon("ADMIN_PANEL_SETTINGS_OUTLINED"),
+                actions=[
+                    ft.OutlinedButton(
+                        "Матрица прав",
+                        icon=_icon("GRID_ON"),
+                        # открываем вкладку матрицы (в дизайнере это тот же ?tab=types)
+                        on_click=lambda _e: page.go("/blueprint/designer?tab=types"),
+                    )
+                ],
             ),
             _section_card(
                 "API-first и интеграции",
@@ -77,21 +127,29 @@ def view(page: ft.Page) -> ft.View:
                     "Мессенджеры (Slack/Teams), Drive/Confluence/Notion.",
                     "GitHub/GitLab/Jira/мониторинг/CRM/ERP/BI.",
                 ],
-                icon=ft.icons.SYNC_ALT,
+                icon=_icon("SYNC_ALT"),
+                actions=[
+                    ft.OutlinedButton(
+                        "Открыть API",
+                        icon=_icon("ROCKET_LAUNCH"),
+                        on_click=lambda _e: page.go("/settings"),  # временно ведём в настройки/интеграции
+                    )
+                ],
             ),
             _section_card(
-                "Производительность и надежность",
+                "Производительность и надёжность",
                 [
                     "Горизонтальное масштабирование, очереди, кэш.",
                     "Минимальные простои, миграции без простоев.",
                 ],
-                icon=ft.icons.SPEED,
+                icon=_icon("SPEED"),
             ),
         ]
     )
 
-    # ----- вкладка 2: IT-процессы --------------------------------------------------------
-    t2_cards = _grid(
+
+def _tab2(_page: ft.Page) -> ft.Control:
+    return _grid(
         [
             _section_card(
                 "Глубокая связь с кодом",
@@ -99,7 +157,7 @@ def view(page: ft.Page) -> ft.View:
                     "Линки на коммиты/ветки/PR прямо из задач.",
                     "Автоматические статусы CI/CD в карточке задачи.",
                 ],
-                icon=ft.icons.CODE,
+                icon=_icon("CODE"),
             ),
             _section_card(
                 "Шаблоны IT-workflow",
@@ -107,7 +165,7 @@ def view(page: ft.Page) -> ft.View:
                     "Баги/фичи/инциденты/рефакторинг — готовые конфигурации.",
                     "Поля ‘среда’, ‘версия’, ‘компонент’.",
                 ],
-                icon=ft.icons.INTEGRATION_INSTRUCTIONS,
+                icon=_icon("INTEGRATION_INSTRUCTIONS"),
             ),
             _section_card(
                 "Инциденты и SLA",
@@ -115,13 +173,14 @@ def view(page: ft.Page) -> ft.View:
                     "Приоритизация P0–P2, таймеры реакции/решения.",
                     "Постмортем — шаблон и артефакты расследования.",
                 ],
-                icon=ft.icons.EMERGENCY,
+                icon=_icon("EMERGENCY"),
             ),
         ]
     )
 
-    # ----- вкладка 3: Бизнес-процессы ----------------------------------------------------
-    t3_cards = _grid(
+
+def _tab3(_page: ft.Page) -> ft.Control:
+    return _grid(
         [
             _section_card(
                 "Визуальные конструкторы (No-Code)",
@@ -129,7 +188,7 @@ def view(page: ft.Page) -> ft.View:
                     "Рисуем блок-схему — получаем маршрут и формы.",
                     "Ветвления и условия доступны аналитикам.",
                 ],
-                icon=ft.icons.SCHEMA,
+                icon=_icon("SCHEMA"),
             ),
             _section_card(
                 "Формы и сбор данных",
@@ -137,21 +196,22 @@ def view(page: ft.Page) -> ft.View:
                     "Валидаторы, справочники, зависимости полей.",
                     "Импорт/экспорт, дубликаты, маски ввода.",
                 ],
-                icon=ft.icons.DYNAMIC_FORM,
+                icon=_icon("DYNAMIC_FORM"),
             ),
             _section_card(
                 "BI и метрики",
                 [
                     "KPI: время цикла, загрузка, bottlenecks.",
-                    "Экспорт в Power BI/Tableau, встроенные отчеты.",
+                    "Экспорт в Power BI/Tableau, встроенные отчёты.",
                 ],
-                icon=ft.icons.ANALYTICS,
+                icon=_icon("ANALYTICS"),
             ),
         ]
     )
 
-    # ----- вкладка 4: Коллаборация -------------------------------------------------------
-    t4_cards = _grid(
+
+def _tab4(_page: ft.Page) -> ft.Control:
+    return _grid(
         [
             _section_card(
                 "Коммуникации",
@@ -159,7 +219,7 @@ def view(page: ft.Page) -> ft.View:
                     "Комментарии, треды, @упоминания.",
                     "Q&A внутри задачи — не смешивается с логом действий.",
                 ],
-                icon=ft.icons.MODE_COMMENT_OUTLINED,
+                icon=_icon("MODE_COMMENT_OUTLINED"),
             ),
             _section_card(
                 "Уведомления и эскалации",
@@ -167,7 +227,7 @@ def view(page: ft.Page) -> ft.View:
                     "Гибкие правила, чтобы не спамить.",
                     "Эскалации по таймерам/условиям.",
                 ],
-                icon=ft.icons.NOTIFICATIONS_ACTIVE_OUTLINED,
+                icon=_icon("NOTIFICATIONS_ACTIVE_OUTLINED"),
             ),
             _section_card(
                 "Файлы и история",
@@ -175,13 +235,14 @@ def view(page: ft.Page) -> ft.View:
                     "Вложения с версиями, предпросмотр.",
                     "Полный аудит изменений в карточке.",
                 ],
-                icon=ft.icons.ATTACH_FILE,
+                icon=_icon("ATTACH_FILE"),
             ),
         ]
     )
 
-    # ----- вкладка 5: UX/UI --------------------------------------------------------------
-    t5_cards = _grid(
+
+def _tab5(_page: ft.Page) -> ft.Control:
+    return _grid(
         [
             _section_card(
                 "Интерфейс класса Linear",
@@ -189,7 +250,7 @@ def view(page: ft.Page) -> ft.View:
                     "Скорость, минимум отвлекающих элементов.",
                     "Горячие клавиши, быстрые действия, командная палитра.",
                 ],
-                icon=ft.icons.ROCKET_LAUNCH_OUTLINED,
+                icon=_icon("ROCKET_LAUNCH_OUTLINED"),
             ),
             _section_card(
                 "Поиск и фильтры",
@@ -197,20 +258,21 @@ def view(page: ft.Page) -> ft.View:
                     "Глобальный поиск, сохранённые вьюхи (‘Мои баги’, ‘На этой неделе’).",
                     "Представления: Канбан / Список / Календарь / Гант.",
                 ],
-                icon=ft.icons.FILTER_ALT,
+                icon=_icon("FILTER_ALT"),
             ),
             _section_card(
                 "Мобильные клиенты",
                 [
                     "Нативные действия и уведомления, офлайн-режим.",
                 ],
-                icon=ft.icons.PHONE_IPHONE,
+                icon=_icon("PHONE_IPHONE"),
             ),
         ]
     )
 
-    # ----- вкладка 6: «Фишки» ------------------------------------------------------------
-    t6_cards = _grid(
+
+def _tab6(_page: ft.Page) -> ft.Control:
+    return _grid(
         [
             _section_card(
                 "AI-помощник",
@@ -219,38 +281,75 @@ def view(page: ft.Page) -> ft.View:
                     "Советы по автоматизации и шаблонные подзадачи.",
                     "Подсказки по узким местам и рискам.",
                 ],
-                icon=ft.icons.SMART_TOY_OUTLINED,
+                icon=_icon("SMART_TOY_OUTLINED"),
             ),
             _section_card(
                 "Low-Code автоматизация",
                 [
                     "Конструктор «Если-то»: триггеры → действия (Slack, email, webhooks).",
                 ],
-                icon=ft.icons.AUTO_MODE,
+                icon=_icon("AUTO_MODE"),
             ),
             _section_card(
                 "Маркетплейс",
                 [
                     "Плагины и интеграции от сторонних разработчиков.",
                 ],
-                icon=ft.icons.EXTENSION,
-            ),
+                icon=_icon("EXTENSION")),
         ]
     )
 
+
+# Сопоставление путей-вкладок
+_TABS: list[tuple[str, str, str, callable]] = [
+    ("",          "Фундамент",     "HUB_OUTLINED",     _tab1),
+    ("it",        "IT-процессы",   "TERMINAL",         _tab2),
+    ("business",  "Бизнес",        "BUSINESS_CENTER",  _tab3),
+    ("collab",    "Коллаборация",  "GROUPS",           _tab4),
+    ("ux",        "UX/UI",         "STYLE",            _tab5),
+    ("extras",    "Фишки",         "AUTO_AWESOME",     _tab6),
+]
+_SLUG_TO_INDEX = {slug: i for i, (slug, *_rest) in enumerate(_TABS)}
+
+
+def _selected_index_from_route(route: str | None) -> int:
+    path = (route or "").split("?")[0].split("#")[0]
+    # ожидаем /blueprint или /blueprint/<slug>
+    parts = [p for p in (path or "/").split("/") if p]
+    slug = parts[1] if len(parts) > 1 and parts[0] == "blueprint" else ""
+    return _SLUG_TO_INDEX.get(slug, 0)
+
+
+# ── view ─────────────────────────────────────────────────────────────────────
+def view(page: ft.Page) -> ft.View:
+    selected_idx = _selected_index_from_route(page.route or "/blueprint")
+
+    # Сбор табов c контентом
+    tab_controls: list[ft.Tab] = []
+    for i, (slug, title, icon_name, builder) in enumerate(_TABS):
+        content = builder(page)
+        tab_controls.append(
+            ft.Tab(
+                text=title,
+                icon=_icon(icon_name),
+                content=ft.Container(content, padding=0),
+            )
+        )
+
     tabs = ft.Tabs(
-        selected_index=0,
+        selected_index=selected_idx,
         animation_duration=150,
-        tabs=[
-            ft.Tab(text="Фундамент", icon=ft.icons.HUB_OUTLINED, content=ft.Container(t1_cards, padding=0)),
-            ft.Tab(text="IT-процессы", icon=ft.icons.TERMINAL, content=ft.Container(t2_cards, padding=0)),
-            ft.Tab(text="Бизнес", icon=ft.icons.BUSINESS_CENTER, content=ft.Container(t3_cards, padding=0)),
-            ft.Tab(text="Коллаборация", icon=ft.icons.GROUPS, content=ft.Container(t4_cards, padding=0)),
-            ft.Tab(text="UX/UI", icon=ft.icons.STYLE, content=ft.Container(t5_cards, padding=0)),
-            ft.Tab(text="Фишки", icon=ft.icons.AUTO_AWESOME, content=ft.Container(t6_cards, padding=0)),
-        ],
+        tabs=tab_controls,
         expand=False,  # сами карты переносятся, вкладки — в одну строку
     )
+
+    # Синхронизация URL при переключении
+    def _on_tabs_change(_e: ft.ControlEvent) -> None:
+        idx = int(getattr(tabs, "selected_index", 0) or 0)
+        slug = _TABS[idx][0]
+        page.go("/blueprint" if not slug else f"/blueprint/{slug}")
+
+    tabs.on_change = _on_tabs_change
 
     body = ft.Column(
         [

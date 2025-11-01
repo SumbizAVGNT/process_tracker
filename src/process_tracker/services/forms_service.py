@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Any, Tuple
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 
 class FieldOption(BaseModel):
@@ -120,7 +120,7 @@ class FormsService:
 def _default_forms() -> Dict[str, FormSchema]:
     """
     Создаём пару демонстрационных форм.
-    ВАЖНО: Pydantic v2 → используем ТОЛЬКО именованные аргументы!
+    Pydantic v2 → используем ТОЛЬКО именованные аргументы!
     """
     sev_opts = [
         FieldOption(value="sev0", label="SEV0 — критический простой"),

@@ -35,7 +35,14 @@ _PROTECTED_PREFIXES: tuple[str, ...] = (
     "/tasks",
     "/forms",
     "/workflows",
-    "/blueprint",   # ⬅️ новый раздел с вкладками
+    "/blueprint",   # раздел с вкладками
+    # дополнительные разделы
+    "/users",
+    "/templates",
+    "/webhooks",
+    "/views",
+    "/audit",
+    "/files",
 )
 
 
@@ -48,7 +55,7 @@ def _safe_view(factory: Callable[[ft.Page], ft.View], page: ft.Page) -> ft.View:
     try:
         return factory(page)
     except Exception as e:  # noqa: BLE001
-        logger.error("ui_view_error", view=factory.__name__, route=page.route, exc_info=True)
+        logger.error("ui_view_error", view=getattr(factory, "__name__", "view"), route=page.route, exc_info=True)
         traceback.print_exc()
         return _error_500(page, str(e))
 
@@ -156,10 +163,44 @@ def _resolve_view(page: ft.Page, route: str) -> ft.View:
         from .pages import workflows as _wf
         return _safe_view(_wf.view, page)
 
-    # Блюпринт (ядро/конструкторы/интеграции/ RBAC и пр. — страница сама разберёт вкладку по page.route)
+    # Блюпринт (включая специальный конструктор /blueprint/designer)
     if path == "/blueprint" or path.startswith("/blueprint/"):
+        if path == "/blueprint/designer" or path.startswith("/blueprint/designer"):
+            from .pages import blueprint_designer as _bpd
+            return _safe_view(_bpd.view, page)
+
         from .pages import blueprint as _bp
         return _safe_view(_bp.view, page)
+
+    # Пользователи
+    if path == "/users":
+        from .pages import users as _users
+        return _safe_view(_users.view, page)
+
+    # Шаблоны
+    if path == "/templates":
+        from .pages import templates as _tpl
+        return _safe_view(_tpl.view, page)
+
+    # Вебхуки
+    if path == "/webhooks":
+        from .pages import webhooks as _wh
+        return _safe_view(_wh.view, page)
+
+    # Представления
+    if path == "/views":
+        from .pages import views as _views
+        return _safe_view(_views.view, page)
+
+    # Аудит
+    if path == "/audit":
+        from .pages import audit as _audit
+        return _safe_view(_audit.view, page)
+
+    # Файлы
+    if path == "/files":
+        from .pages import files as _files
+        return _safe_view(_files.view, page)
 
     # Настройки
     if path == "/settings":
